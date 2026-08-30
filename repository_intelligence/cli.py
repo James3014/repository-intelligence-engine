@@ -1,8 +1,8 @@
 """Repository Intelligence CLI.
 
-Deterministic, pure local JSON adapter for Repository Intelligence Core V1 operations.
+Deterministic, pure local JSON adapter for Repository Intelligence Core V1/V1.1 operations.
 No GitHub/network/state writes.
-Claim ceiling: ADAPTER_ONLY.
+Claim ceilings: PR_INTELLIGENCE_ONLY, CI_EVIDENCE_ONLY, AUTOMATION_ADVISORY_ONLY.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
+from .cfi import analyze_ci_failure_intelligence
 from .contracts import (
     CI_EVIDENCE_CLAIM_CEILING,
     CLAIM_CEILING,
@@ -22,12 +23,20 @@ from .core import (
     fingerprint_ci_failures,
     revision_identity,
 )
+from .eia import (
+    AUTOMATION_CLAIM_CEILING,
+    plan_external_intelligence_automation,
+)
+from .impact import analyze_change_impact
 
 OPERATIONS: frozenset[str] = frozenset({
     "revision",
     "readiness",
     "overlap",
     "ci",
+    "impact",
+    "cfi",
+    "eia",
 })
 
 
@@ -80,6 +89,33 @@ def execute_operation(operation: str, data: Any) -> dict[str, Any]:
         return {
             "operation": operation,
             "claim_ceiling": CI_EVIDENCE_CLAIM_CEILING,
+            "result": res.to_dict(),
+        }
+    elif operation == "impact":
+        if not isinstance(data, dict):
+            raise ValueError("Input for 'impact' must be a JSON object mapping")
+        res = analyze_change_impact(data)
+        return {
+            "operation": operation,
+            "claim_ceiling": CLAIM_CEILING,
+            "result": res.to_dict(),
+        }
+    elif operation == "cfi":
+        if not isinstance(data, dict):
+            raise ValueError("Input for 'cfi' must be a JSON object snapshot mapping")
+        res = analyze_ci_failure_intelligence(data)
+        return {
+            "operation": operation,
+            "claim_ceiling": CI_EVIDENCE_CLAIM_CEILING,
+            "result": res.to_dict(),
+        }
+    elif operation == "eia":
+        if not isinstance(data, dict):
+            raise ValueError("Input for 'eia' must be a JSON object mapping")
+        res = plan_external_intelligence_automation(data)
+        return {
+            "operation": operation,
+            "claim_ceiling": AUTOMATION_CLAIM_CEILING,
             "result": res.to_dict(),
         }
     else:

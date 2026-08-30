@@ -19,6 +19,7 @@ from repository_intelligence.contracts import (
     CI_EVIDENCE_CLAIM_CEILING,
     CLAIM_CEILING,
 )
+from repository_intelligence.eia import AUTOMATION_CLAIM_CEILING
 
 
 @pytest.fixture
@@ -102,8 +103,60 @@ def sample_ci_snapshot() -> dict:
     }
 
 
+@pytest.fixture
+def sample_impact_data() -> dict:
+    return {
+        "snapshot": {
+            "repository": "owner/repo",
+            "pr_number": 50,
+            "head_sha": "h50",
+            "base_sha": "m50",
+            "current_main_sha": "m50",
+            "changed_files": ["pkg/leaf.py"],
+        },
+        "covered_files": ["pkg/leaf.py", "pkg/mid.py", "pkg/root.py"],
+        "dependency_edges": [
+            {"consumer": "pkg/mid.py", "dependency": "pkg/leaf.py"},
+            {"consumer": "pkg/root.py", "dependency": "pkg/mid.py"},
+        ],
+        "observed_symbols": {
+            "pkg/leaf.py": ["compute_value"],
+        },
+        "graph_complete": True,
+        "graph_errors": [],
+    }
+
+
+@pytest.fixture
+def sample_cfi_snapshot() -> dict:
+    return {
+        "repository": "owner/repo",
+        "pr_number": 88,
+        "head_sha": "h88",
+        "base_sha": "m88",
+        "current_main_sha": "m88",
+        "checks": [
+            {
+                "name": "unit-tests",
+                "status": "failure",
+                "head_sha": "h88",
+                "check_run_id": 9901,
+            }
+        ],
+        "collection_complete": True,
+        "collection_errors": [],
+    }
+
+
+@pytest.fixture
+def sample_eia_data(sample_cfi_snapshot: dict) -> dict:
+    return {
+        "snapshot": sample_cfi_snapshot,
+    }
+
+
 def test_supported_operations_set() -> None:
-    assert OPERATIONS == frozenset({"revision", "readiness", "overlap", "ci"})
+    assert OPERATIONS == frozenset({"revision", "readiness", "overlap", "ci", "impact", "cfi", "eia"})
 
 
 def test_execute_operation_revision(sample_revision_snapshot: dict) -> None:
@@ -150,15 +203,40 @@ def test_execute_operation_ci(sample_ci_snapshot: dict) -> None:
     assert result["has_unexpected_failures"] is True
 
 
+def test_execute_operation_impact(sample_impact_data: dict) -> None:
+    payload = execute_operation("impact", sample_impact_data)
+    assert payload["operation"] == "impact"
+    assert payload["claim_ceiling"] == CLAIM_CEILING
+    result = payload["result"]
+    assert result["direct_impacted_files"] == ["pkg/mid.py"]
+    assert result["transitive_impacted_files"] == ["pkg/root.py"]
+    assert result["all_impacted_files"] == ["pkg/leaf.py", "pkg/mid.py", "pkg/root.py"]
+    assert result["direct_impacted_count"] == 1
+    assert result["is_complete"] is True
+
+
+def test_execute_operation_cfi(sample_cfi_snapshot: dict) -> None:
+    payload = execute_operation("cfi", sample_cfi_snapshot)
+    assert payload["operation"] == "cfi"
+    assert payload["claim_ceiling"] == CI_EVIDENCE_CLAIM_CEILING
+    result = payload["result"]
+    assert result["status"] == "UNEXPECTED_FAILURE_OBSERVED"
+    assert result["diagnosis_eligible"] is True
+    assert result["failed_check_names"] == ["unit-tests"]
+
+
+def test_execute_operation_eia(sample_eia_data: dict) -> None:
+    payload = execute_operation("eia", sample_eia_data)
+    assert payload["operation"] == "eia"
+    assert payload["claim_ceiling"] == AUTOMATION_CLAIM_CEILING
+    result = payload["result"]
+    assert result["decision"] == "READY"
+    assert result["action_kind"] == "CI_FAILURE_DIAGNOSIS"
+
+
 def test_execute_operation_unsupported_or_invalid() -> None:
-    with pytest.raises(ValueError, match="Unknown operation: 'impact'"):
-        execute_operation("impact", {})
-
-    with pytest.raises(ValueError, match="Unknown operation: 'cfi'"):
-        execute_operation("cfi", {})
-
-    with pytest.raises(ValueError, match="Unknown operation: 'eia'"):
-        execute_operation("eia", {})
+    with pytest.raises(ValueError, match="Unknown operation: 'unknown_op'"):
+        execute_operation("unknown_op", {})
 
     with pytest.raises(ValueError, match="Input for 'revision' must be a JSON object snapshot mapping"):
         execute_operation("revision", ["not", "a", "dict"])
@@ -174,6 +252,15 @@ def test_execute_operation_unsupported_or_invalid() -> None:
 
     with pytest.raises(ValueError, match="Input for 'ci' must be a JSON object snapshot mapping"):
         execute_operation("ci", 12345)
+
+    with pytest.raises(ValueError, match="Input for 'impact' must be a JSON object mapping"):
+        execute_operation("impact", ["not", "a", "dict"])
+
+    with pytest.raises(ValueError, match="Input for 'cfi' must be a JSON object snapshot mapping"):
+        execute_operation("cfi", "not a dict")
+
+    with pytest.raises(ValueError, match="Input for 'eia' must be a JSON object mapping"):
+        execute_operation("eia", 9999)
 
 
 def test_load_input_data_file(tmp_path: Path) -> None:
@@ -236,12 +323,18 @@ def test_main_error_handling(capsys: pytest.CaptureFixture[str]) -> None:
     assert "Argument error" in payload["error"]
 
 
-def test_subprocess_invocation(tmp_path: Path, sample_ci_snapshot: dict) -> None:
-    input_file = tmp_path / "ci_input.json"
-    input_file.write_text(json.dumps(sample_ci_snapshot), encoding="utf-8")
+def test_subprocess_invocation(
+    tmp_path: Path,
+    sample_ci_snapshot: dict,
+    sample_impact_data: dict,
+    sample_cfi_snapshot: dict,
+    sample_eia_data: dict,
+) -> None:
+    ci_file = tmp_path / "ci_input.json"
+    ci_file.write_text(json.dumps(sample_ci_snapshot), encoding="utf-8")
 
     proc = subprocess.run(
-        [sys.executable, "-m", "repository_intelligence.cli", "--operation", "ci", "--input", str(input_file)],
+        [sys.executable, "-m", "repository_intelligence.cli", "--operation", "ci", "--input", str(ci_file)],
         capture_output=True,
         text=True,
         check=False,
@@ -251,3 +344,46 @@ def test_subprocess_invocation(tmp_path: Path, sample_ci_snapshot: dict) -> None
     assert payload["operation"] == "ci"
     assert payload["claim_ceiling"] == CI_EVIDENCE_CLAIM_CEILING
     assert payload["result"]["unexpected_count"] == 1
+
+    impact_file = tmp_path / "impact_input.json"
+    impact_file.write_text(json.dumps(sample_impact_data), encoding="utf-8")
+    proc_impact = subprocess.run(
+        [sys.executable, "-m", "repository_intelligence.cli", "--operation", "impact", "--input", str(impact_file)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc_impact.returncode == 0
+    payload_impact = json.loads(proc_impact.stdout)
+    assert payload_impact["operation"] == "impact"
+    assert payload_impact["claim_ceiling"] == CLAIM_CEILING
+    assert payload_impact["result"]["direct_impacted_count"] == 1
+
+    cfi_file = tmp_path / "cfi_input.json"
+    cfi_file.write_text(json.dumps(sample_cfi_snapshot), encoding="utf-8")
+    proc_cfi = subprocess.run(
+        [sys.executable, "-m", "repository_intelligence.cli", "--operation", "cfi", "--input", str(cfi_file)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc_cfi.returncode == 0
+    payload_cfi = json.loads(proc_cfi.stdout)
+    assert payload_cfi["operation"] == "cfi"
+    assert payload_cfi["claim_ceiling"] == CI_EVIDENCE_CLAIM_CEILING
+    assert payload_cfi["result"]["status"] == "UNEXPECTED_FAILURE_OBSERVED"
+
+    eia_file = tmp_path / "eia_input.json"
+    eia_file.write_text(json.dumps(sample_eia_data), encoding="utf-8")
+    proc_eia = subprocess.run(
+        [sys.executable, "-m", "repository_intelligence.cli", "--operation", "eia", "--input", str(eia_file)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc_eia.returncode == 0
+    payload_eia = json.loads(proc_eia.stdout)
+    assert payload_eia["operation"] == "eia"
+    assert payload_eia["claim_ceiling"] == AUTOMATION_CLAIM_CEILING
+    assert payload_eia["result"]["decision"] == "READY"
+
