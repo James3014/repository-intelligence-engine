@@ -1,8 +1,19 @@
 [project]
 name = "repository-intelligence-engine"
 version = "0.1.0"
+description = "Deterministic, transport-neutral repository intelligence engine and read-only GitHub adapter"
 requires-python = ">=3.10"
 dependencies = []
+
+[project.scripts]
+repository-intelligence = "repository_intelligence.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["repository_intelligence*", "adapters*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
