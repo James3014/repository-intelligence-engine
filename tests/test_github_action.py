@@ -134,4 +134,3 @@ def test_main_writes_report_summary_and_outputs_without_github_mutation(tmp_path
     output_text = outputs.read_text(encoding="utf-8")
     assert "eia-decision=READY" in output_text
     assert "claim-ceiling=ADVISORY_EVIDENCE_ONLY" in output_text
-
