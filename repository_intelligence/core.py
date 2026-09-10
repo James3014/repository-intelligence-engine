@@ -32,11 +32,27 @@ from .contracts import (
 )
 
 
+VALID_REPO_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-")
+
+
 def _validate_repo_format(repo: str) -> bool:
+    """Validate canonical owner/name repository identity format.
+
+    Enforces exact owner/name where both segments are non-empty and
+    contain only alphanumeric characters, underscore, period, or hyphen.
+    Rejects leading/trailing whitespace, internal whitespace, control characters,
+    empty segments, and extra path segments.
+    """
     if not isinstance(repo, str) or not repo:
         return False
     parts = repo.split("/")
-    return len(parts) == 2 and all(bool(p.strip()) for p in parts)
+    if len(parts) != 2:
+        return False
+    owner, name = parts
+    if not owner or not name:
+        return False
+    return all(ch in VALID_REPO_CHARS for ch in owner) and all(ch in VALID_REPO_CHARS for ch in name)
+
 
 
 def revision_identity(snapshot: PRSnapshot | Mapping[str, Any] | Any) -> RevisionIdentity:

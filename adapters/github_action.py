@@ -83,13 +83,12 @@ def _utc_now() -> str:
 
 
 def _validate_repo(repo: str) -> str:
-    if not isinstance(repo, str):
-        raise ValueError("repository must be owner/name")
-    parts = repo.split("/")
-    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-")
-    if len(parts) != 2 or any(not part or any(ch not in allowed for ch in part) for part in parts):
+    from repository_intelligence.core import _validate_repo_format
+
+    if not _validate_repo_format(repo):
         raise ValueError("repository must be owner/name")
     return repo
+
 
 
 def _paginate_list(api: GitHubReadAPI, path: str, *, key: str | None = None) -> list[Mapping[str, Any]]:
