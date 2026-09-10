@@ -21,6 +21,8 @@ from .contracts import (
     CLAIM_CEILING,
     CI_EVIDENCE_CLAIM_CEILING,
     TERMINAL_FAILURE_STATUSES,
+    SUPPORTED_TERMINAL_FAILURES,
+    is_terminal_failure_status,
     CIFailureFingerprint,
     CrossPROverlapResult,
     EvidenceCompleteness,
@@ -405,7 +407,7 @@ def _normalize_check(
         return None, gaps
 
     status_lower = status.lower()
-    is_terminal = status_lower in TERMINAL_FAILURE_STATUSES
+    is_terminal = is_terminal_failure_status(status_lower)
     is_unexpected = is_terminal and not expected_failure
 
     if is_terminal:
@@ -542,7 +544,7 @@ def fingerprint_ci_failures(
             continue
         total_valid_checks += 1
         status_lower = norm.status.lower()
-        if status_lower not in TERMINAL_FAILURE_STATUSES:
+        if not is_terminal_failure_status(status_lower):
             continue
         if expected_check_run_id is not None and norm.check_run_id != expected_check_run_id:
             gaps.append("foreign check identity")

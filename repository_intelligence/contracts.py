@@ -45,6 +45,16 @@ TERMINAL_FAILURE_STATUSES: frozenset[str] = frozenset({
     "action_required",
 })
 
+SUPPORTED_TERMINAL_FAILURES: frozenset[str] = TERMINAL_FAILURE_STATUSES | frozenset({"red"})
+
+
+def is_terminal_failure_status(status: Any) -> bool:
+    """True for canonical terminal failure statuses and supported aliases like 'red'."""
+    if not isinstance(status, str):
+        return False
+    return status.strip().lower() in SUPPORTED_TERMINAL_FAILURES
+
+
 
 @dataclass(frozen=True)
 class RevisionIdentity:

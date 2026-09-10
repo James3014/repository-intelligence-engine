@@ -1,3 +1,8 @@
+from .contracts import (
+    SUPPORTED_TERMINAL_FAILURES,
+    TERMINAL_FAILURE_STATUSES,
+    is_terminal_failure_status,
+)
 from .models import *
 
 DEFAULT_AUTHORITY_PATTERNS = ("AGENTS.md", "docs/agents/", "docs/governance/", "policy/")
@@ -31,7 +36,7 @@ def classify(pr, authority_patterns=DEFAULT_AUTHORITY_PATTERNS):
     if pr.expected_failure or any(check.expected_failure for check in pr.checks):
         add("EXPECTED_FAILURE")
     if any(
-        check.status.lower() in ("failure", "failed", "red") and not check.expected_failure
+        is_terminal_failure_status(check.status) and not check.expected_failure
         for check in pr.checks
     ):
         add("UNEXPECTED_FAILURE")
