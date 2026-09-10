@@ -14,6 +14,7 @@ from typing import Any, Mapping
 from .contracts import (
     CI_EVIDENCE_CLAIM_CEILING,
     TERMINAL_FAILURE_STATUSES,
+    is_terminal_failure_status,
     CIFailureIntelligenceReportV1,
     CIFailureTriageStatus,
     EvidenceCompleteness,
@@ -115,7 +116,7 @@ def verify_ci_failure_intelligence_report(payload: Mapping[str, Any]) -> bool:
             if not isinstance(check, Mapping):
                 return False
             status_value = check.get("status")
-            if not isinstance(status_value, str) or status_value.lower() not in TERMINAL_FAILURE_STATUSES:
+            if not is_terminal_failure_status(status_value):
                 return False
             if check.get("is_unexpected") is not should_be_unexpected:
                 return False
