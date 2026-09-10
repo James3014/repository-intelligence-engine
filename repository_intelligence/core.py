@@ -728,16 +728,6 @@ def verify_repository_intelligence_report(payload: Mapping[str, Any]) -> bool:
         return False
     if not isinstance(payload.get("observed_at"), str):
         return False
-    if payload.get("evidence_completeness") not in {
-        EvidenceCompleteness.COMPLETE.value,
-        EvidenceCompleteness.PARTIAL.value,
-        EvidenceCompleteness.INCOMPLETE.value,
-    }:
-        return False
-    top_gaps = payload.get("evidence_gaps")
-    if not isinstance(top_gaps, list) or not all(isinstance(g, str) for g in top_gaps):
-        return False
-
     valid_dispositions = {d.value for d in Disposition}
     valid_risks = {"LOW", "MED", "HIGH"}
     valid_completeness = {
@@ -746,17 +736,27 @@ def verify_repository_intelligence_report(payload: Mapping[str, Any]) -> bool:
         EvidenceCompleteness.INCOMPLETE.value,
     }
 
+    top_completeness = payload.get("evidence_completeness")
+    if not isinstance(top_completeness, str) or top_completeness not in valid_completeness:
+        return False
+    top_gaps = payload.get("evidence_gaps")
+    if not isinstance(top_gaps, list) or not all(isinstance(g, str) for g in top_gaps):
+        return False
+
     items = payload.get("items")
     if not isinstance(items, list):
         return False
     for item in items:
         if not isinstance(item, Mapping) or item.get("claim_ceiling") != CLAIM_CEILING:
             return False
-        if item.get("disposition") not in valid_dispositions:
+        disp = item.get("disposition")
+        if not isinstance(disp, str) or disp not in valid_dispositions:
             return False
-        if item.get("risk") not in valid_risks:
+        risk = item.get("risk")
+        if not isinstance(risk, str) or risk not in valid_risks:
             return False
-        if item.get("evidence_completeness") not in valid_completeness:
+        item_comp = item.get("evidence_completeness")
+        if not isinstance(item_comp, str) or item_comp not in valid_completeness:
             return False
         if not isinstance(item.get("is_review_ready"), bool):
             return False
@@ -787,7 +787,8 @@ def verify_repository_intelligence_report(payload: Mapping[str, Any]) -> bool:
             return False
         if not isinstance(identity.get("repository"), str):
             return False
-        if not isinstance(identity.get("pr_number"), int):
+        pr_num = identity.get("pr_number")
+        if isinstance(pr_num, bool) or not isinstance(pr_num, int):
             return False
         if not isinstance(identity.get("head_sha"), str):
             return False
@@ -801,6 +802,24 @@ def verify_repository_intelligence_report(payload: Mapping[str, Any]) -> bool:
         if not isinstance(id_gaps, list) or not all(isinstance(g, str) for g in id_gaps):
             return False
 
+        # Optional declared SHAs: str | None
+        for key in ("declared_base_sha", "declared_head_sha", "declared_main_sha"):
+            val = identity.get(key)
+            if val is not None and not isinstance(val, str):
+                return False
+
+        # Stale booleans: strictly bool (reject int/list/dict/etc.)
+        for key in (
+            "stale_base",
+            "stale_declared_base",
+            "stale_declared_head",
+            "stale_declared_main",
+            "stale_evidence",
+        ):
+            val = identity.get(key)
+            if not isinstance(val, bool):
+                return False
+
         expected_review_identity = [
             identity.get("repository"),
             identity.get("pr_number"),
@@ -812,6 +831,7 @@ def verify_repository_intelligence_report(payload: Mapping[str, Any]) -> bool:
             return False
         if item.get("repository") != identity.get("repository"):
             return False
-        if item.get("pr_number") != identity.get("pr_number"):
+        item_pr = item.get("pr_number")
+        if isinstance(item_pr, bool) or not isinstance(item_pr, int) or item_pr != identity.get("pr_number"):
             return False
     return True
