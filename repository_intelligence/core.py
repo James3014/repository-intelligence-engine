@@ -706,6 +706,13 @@ def build_repository_intelligence_report(
 
 
 def verify_repository_intelligence_report(payload: Mapping[str, Any]) -> bool:
+    """Verify repository intelligence report schema and content hash.
+
+    Verification boundary:
+    Validates structural integrity, declared enum/type conformance, and content_sha256
+    consistency against the canonical JSON hashing algorithm. It does NOT provide
+    authenticated provenance or verify the external truth of source facts.
+    """
     if not isinstance(payload, Mapping):
         return False
     if payload.get("schema") != "reviewer.repository_intelligence.v1":
@@ -715,21 +722,85 @@ def verify_repository_intelligence_report(payload: Mapping[str, Any]) -> bool:
     supplied = payload.get("content_sha256")
     if not (isinstance(supplied, str) and len(supplied) == 64 and supplied == _content_hash(payload)):
         return False
+    if not isinstance(payload.get("repository"), str):
+        return False
+    if not isinstance(payload.get("current_main_sha"), str):
+        return False
+    if not isinstance(payload.get("observed_at"), str):
+        return False
     if payload.get("evidence_completeness") not in {
         EvidenceCompleteness.COMPLETE.value,
         EvidenceCompleteness.PARTIAL.value,
         EvidenceCompleteness.INCOMPLETE.value,
     }:
         return False
+    top_gaps = payload.get("evidence_gaps")
+    if not isinstance(top_gaps, list) or not all(isinstance(g, str) for g in top_gaps):
+        return False
+
+    valid_dispositions = {d.value for d in Disposition}
+    valid_risks = {"LOW", "MED", "HIGH"}
+    valid_completeness = {
+        EvidenceCompleteness.COMPLETE.value,
+        EvidenceCompleteness.PARTIAL.value,
+        EvidenceCompleteness.INCOMPLETE.value,
+    }
+
     items = payload.get("items")
     if not isinstance(items, list):
         return False
     for item in items:
         if not isinstance(item, Mapping) or item.get("claim_ceiling") != CLAIM_CEILING:
             return False
+        if item.get("disposition") not in valid_dispositions:
+            return False
+        if item.get("risk") not in valid_risks:
+            return False
+        if item.get("evidence_completeness") not in valid_completeness:
+            return False
+        if not isinstance(item.get("is_review_ready"), bool):
+            return False
+
+        findings = item.get("findings")
+        if not isinstance(findings, list) or not all(isinstance(f, str) for f in findings):
+            return False
+        reasons = item.get("reasons")
+        if not isinstance(reasons, list) or not all(isinstance(r, str) for r in reasons):
+            return False
+        evidence_gaps = item.get("evidence_gaps")
+        if not isinstance(evidence_gaps, list) or not all(isinstance(g, str) for g in evidence_gaps):
+            return False
+
+        overlaps = item.get("overlaps")
+        if not isinstance(overlaps, Mapping):
+            return False
+        for pr_key, paths in overlaps.items():
+            try:
+                int(pr_key)
+            except (ValueError, TypeError):
+                return False
+            if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+                return False
+
         identity = item.get("identity")
         if not isinstance(identity, Mapping):
             return False
+        if not isinstance(identity.get("repository"), str):
+            return False
+        if not isinstance(identity.get("pr_number"), int):
+            return False
+        if not isinstance(identity.get("head_sha"), str):
+            return False
+        if not isinstance(identity.get("base_sha"), str):
+            return False
+        if not isinstance(identity.get("current_main_sha"), str):
+            return False
+        if not isinstance(identity.get("is_valid"), bool):
+            return False
+        id_gaps = identity.get("evidence_gaps")
+        if not isinstance(id_gaps, list) or not all(isinstance(g, str) for g in id_gaps):
+            return False
+
         expected_review_identity = [
             identity.get("repository"),
             identity.get("pr_number"),
@@ -738,5 +809,9 @@ def verify_repository_intelligence_report(payload: Mapping[str, Any]) -> bool:
             identity.get("current_main_sha"),
         ]
         if identity.get("review_identity") != expected_review_identity:
+            return False
+        if item.get("repository") != identity.get("repository"):
+            return False
+        if item.get("pr_number") != identity.get("pr_number"):
             return False
     return True
