@@ -152,7 +152,7 @@ This is especially useful when several agents or developers work in parallel.
 
 - exact review identity;
 - expected vs unexpected failures;
-- check-run / run / job / artifact identity when supplied;
+- check-run / commit-status / run / job / artifact identity when supplied;
 - failed check metadata;
 - evidence completeness;
 - a deterministic failure fingerprint;
@@ -300,6 +300,7 @@ permissions:
   contents: read
   pull-requests: read
   checks: read
+  statuses: read
 
 jobs:
   repository-intelligence:
@@ -323,7 +324,7 @@ The action automatically acquires, through GitHub REST:
 - current default-branch SHA;
 - changed filenames;
 - labels / draft / mergeability metadata;
-- check-run evidence.
+- Check Run and Commit Status evidence for the exact PR head.
 
 It deliberately does **not**:
 
@@ -811,6 +812,7 @@ permissions:
   contents: read
   pull-requests: read
   checks: read
+  statuses: read
 ```
 
 The Action never checks out or executes PR code.

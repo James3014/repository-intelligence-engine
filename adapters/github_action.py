@@ -132,11 +132,25 @@ def collect_pr_snapshot(api: GitHubReadAPI, repository: str, pr_number: int) -> 
     except (KeyError, TypeError) as exc:
         raise RuntimeError("pull request identity evidence is incomplete") from exc
 
-    files = _paginate_list(api, f"{prefix}/pulls/{pr_number}/files")
-    check_rows = _paginate_list(api, f"{prefix}/commits/{urllib.parse.quote(head_sha, safe='')}/check-runs", key="check_runs")
-
     changed_files: list[str] = []
     collection_errors: list[str] = []
+
+    files = _paginate_list(api, f"{prefix}/pulls/{pr_number}/files")
+
+    check_rows: list[Mapping[str, Any]] = []
+    check_path = f"{prefix}/commits/{urllib.parse.quote(head_sha, safe='')}/check-runs"
+    try:
+        check_rows = _paginate_list(api, check_path, key="check_runs")
+    except RuntimeError as exc:
+        collection_errors.append(f"check_runs acquisition failed: {exc}")
+
+    status_rows: list[Mapping[str, Any]] = []
+    status_path = f"{prefix}/commits/{urllib.parse.quote(head_sha, safe='')}/statuses"
+    try:
+        status_rows = _paginate_list(api, status_path)
+    except RuntimeError as exc:
+        collection_errors.append(f"commit_statuses acquisition failed: {exc}")
+
     for row in files:
         filename = row.get("filename")
         if isinstance(filename, str) and filename:
@@ -151,6 +165,10 @@ def collect_pr_snapshot(api: GitHubReadAPI, repository: str, pr_number: int) -> 
         if not isinstance(name, str) or not isinstance(status, str):
             collection_errors.append("checks: missing name/status")
             continue
+        row_head_sha = row.get("head_sha")
+        if not isinstance(row_head_sha, str) or row_head_sha != head_sha:
+            collection_errors.append("checks: head_sha missing or mismatches PR head_sha")
+            continue
         check_suite = row.get("check_suite") if isinstance(row.get("check_suite"), Mapping) else {}
         app = row.get("app") if isinstance(row.get("app"), Mapping) else {}
         output = row.get("output") if isinstance(row.get("output"), Mapping) else {}
@@ -158,7 +176,7 @@ def collect_pr_snapshot(api: GitHubReadAPI, repository: str, pr_number: int) -> 
             "name": name,
             "status": status,
             "expected_failure": False,
-            "head_sha": row.get("head_sha") if isinstance(row.get("head_sha"), str) else head_sha,
+            "head_sha": row_head_sha,
         }
         optional = {
             "check_run_id": row.get("id"),
@@ -176,6 +194,63 @@ def collect_pr_snapshot(api: GitHubReadAPI, repository: str, pr_number: int) -> 
             if value is not None:
                 check[key] = value
         checks.append(check)
+
+    # The list endpoint is reverse chronological.  Only the first status for
+    # each context is current; older entries must never contribute alongside it.
+    seen_contexts: set[str] = set()
+    for row in status_rows:
+        context = row.get("context")
+        if not isinstance(context, str) or not context:
+            collection_errors.append("commit_statuses: missing context")
+            continue
+        context_key = context.casefold()
+        if context_key in seen_contexts:
+            continue
+        # GitHub status contexts are case-insensitive. Mark the normalized
+        # context before validating the row so a malformed latest entry cannot
+        # be replaced by a historical entry for the same context.
+        seen_contexts.add(context_key)
+        state = row.get("state")
+        row_head_sha = row.get("sha")
+        if not isinstance(state, str) or state.lower() not in {"error", "failure", "pending", "success"}:
+            collection_errors.append(f"commit_statuses: invalid state for context '{context}'")
+            continue
+        if not isinstance(row_head_sha, str) or row_head_sha != head_sha:
+            collection_errors.append(
+                f"commit_statuses: sha missing or mismatches PR head_sha for context '{context}'"
+            )
+            continue
+
+        status_id = row.get("id")
+        status_url = row.get("url")
+        target_url = row.get("target_url")
+        updated_at = row.get("updated_at")
+        created_at = row.get("created_at")
+        if isinstance(status_id, int):
+            external_id = f"github_commit_status:{status_id}"
+        elif isinstance(status_url, str) and status_url:
+            external_id = f"github_commit_status_url:{status_url}"
+        else:
+            # The context + exact head + observation time is a deterministic
+            # fallback for minimal GitHub-compatible fixtures without an id.
+            observed_at = updated_at if isinstance(updated_at, str) else created_at
+            external_id = f"github_commit_status:{context}:{head_sha}:{observed_at or ''}"
+        commit_status: dict[str, Any] = {
+            "name": context,
+            "status": state.lower(),
+            "expected_failure": False,
+            "head_sha": row_head_sha,
+            "external_id": external_id,
+        }
+        optional = {
+            "details_url": target_url,
+            "html_url": row.get("html_url"),
+            "node_id": row.get("node_id"),
+        }
+        for key, value in optional.items():
+            if isinstance(value, str) and value:
+                commit_status[key] = value
+        checks.append(commit_status)
 
     labels = [
         str(label.get("name"))
