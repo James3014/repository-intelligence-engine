@@ -2,7 +2,7 @@ name: Repository Intelligence
 
 description: >-
   Read-only advisory intelligence for pull requests. Acquires GitHub metadata,
-  changed-file names, and check-run evidence without checking out or executing PR code.
+  changed-file names, and status-check evidence without checking out or executing PR code.
 
 inputs:
   pr-number:
