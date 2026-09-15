@@ -13,7 +13,7 @@ It answers questions such as:
 
 The engine is deliberately **advisory-only**. It can describe repository state and produce hash-bound evidence, but it cannot approve, merge, release, publish, dispatch workers, or execute pull-request source.
 
-Current release: **`v0.1.1`**
+Current release: **`v0.1.2`**
 
 License: **Apache-2.0**
 
@@ -309,7 +309,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - id: ri
-        uses: James3014/repository-intelligence-engine@v0.1.1
+        uses: James3014/repository-intelligence-engine@v0.1.2
 
       - uses: actions/upload-artifact@v4
         with:
@@ -367,13 +367,44 @@ Operations such as cross-PR `overlap` and graph-based `impact` require evidence 
 | `eia-decision` | EIA advisory decision |
 | `claim-ceiling` | Top-level `ADVISORY_EVIDENCE_ONLY` |
 
+#### Optional terminal observation action
+
+`v0.1.2` also publishes `terminal/` as a second-stage composite Action for consumers that need a bounded observation after the external check/status set becomes terminal and remains stable for a quiescence window. It is intentionally separate from the PR-event snapshot above.
+
+```yaml
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - id: ri
+        uses: James3014/repository-intelligence-engine@v0.1.2
+
+  terminal:
+    needs: snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - id: ri-terminal
+        uses: James3014/repository-intelligence-engine/terminal@v0.1.2
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          expected-head-sha: ${{ github.event.pull_request.head.sha }}
+```
+
+The terminal action:
+
+- rebinds every observation to the exact expected PR head and fails if that head changes;
+- excludes checks belonging to its own current GitHub Actions run so it does not wait on itself;
+- requires a non-empty external check/status set to be terminal and stable for the bounded quiescence window;
+- emits hash-bound terminal evidence with `OBSERVED_CHECK_SET_TERMINAL_AFTER_QUIESCENCE`;
+- remains `ADVISORY_EVIDENCE_ONLY`. It does not infer which checks are required, and it does not grant Candidate acceptance or merge readiness.
+
 ### B. CLI — easiest for local tools and pipelines
 
 Install directly from the immutable release tag:
 
 ```bash
 python3 -m pip install \
-  "git+https://github.com/James3014/repository-intelligence-engine.git@v0.1.1"
+  "git+https://github.com/James3014/repository-intelligence-engine.git@v0.1.2"
 ```
 
 Then:
@@ -770,7 +801,7 @@ You do **not** copy the engine into each repository. All consumers should depend
 For CI and automation, prefer immutable version pinning:
 
 ```yaml
-uses: James3014/repository-intelligence-engine@v0.1.1
+uses: James3014/repository-intelligence-engine@v0.1.2
 ```
 
 For environments that require a commit-level pin, use the release commit associated with the tag.

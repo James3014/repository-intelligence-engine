@@ -92,18 +92,24 @@ The output is a candidate for human/controller evidence admission, not an automa
 
 ## Important timing boundary
 
-The current GitHub Action is a **PR-event snapshot**. A valid artifact can say `COMPLETE / NO_TERMINAL_FAILURE` while other repository CI is still running later in the same PR lifecycle.
+Repository Intelligence now has two deliberately distinct GitHub Action surfaces:
+
+- the root Action is a **PR-event snapshot** and can legitimately report `COMPLETE / NO_TERMINAL_FAILURE` while later repository CI is still running;
+- `terminal/` performs a bounded **terminal observed-check** pass for one exact PR head, excluding its own run and waiting until the observed external check/status set is non-empty, terminal, and stable for the configured quiescence window.
 
 Therefore:
 
 ```text
-successful RIE workflow
-!= all repository CI terminal-success
+successful PR-event snapshot
+!= terminal observed-check evidence
+
+terminal observed-check evidence
+!= proof of repository required-check completeness
 != Candidate acceptance
 != merge readiness
 ```
 
-Wave C records this explicitly rather than silently converting the sidecar into a required merge gate. A terminal-CI snapshot redesign remains a separate, evidence-driven decision.
+The corpus must preserve which surface produced each observation instead of silently upgrading snapshot evidence into terminal evidence. Neither surface is a required merge gate.
 
 ## Updating the corpus
 
