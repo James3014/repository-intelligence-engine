@@ -2,7 +2,7 @@
   "schema": "repository_intelligence.dogfooding_corpus.v1",
   "claim_ceiling": "OBSERVATIONAL_EVIDENCE_ONLY",
   "source_issue": 18,
-  "observed_through": "2026-09-16T05:44:00+08:00",
+  "observed_through": "2026-09-16T07:47:44+08:00",
   "evidence_classes": [
     "LIVE_FLEET_DOGFOOD",
     "CONTROLLED_REPRODUCTION",
@@ -186,6 +186,152 @@
         "This is not a terminal-CI or merge-readiness verdict.",
         "This does not establish broad external adoption."
       ]
+    },
+    {
+      "case_id": "RIE-25-TERMINAL-RELEASE-CANDIDATE",
+      "kind": "OPERATING_WITNESS",
+      "evidence_class": "LIVE_FLEET_DOGFOOD",
+      "status": "POSITIVE",
+      "failure_family": null,
+      "repository": "James3014/repository-intelligence-engine",
+      "pr_number": 25,
+      "head_sha": "a8c502fe809dca39385aacafd595ea36b8b5700c",
+      "base_sha": "b1a9272f045f6e6b69dd350b49c277b2c17a37d6",
+      "current_main_sha": "b1a9272f045f6e6b69dd350b49c277b2c17a37d6",
+      "observed_at": "2026-09-15T23:41:02Z",
+      "evidence_refs": [
+        "https://github.com/James3014/repository-intelligence-engine/pull/25",
+        "https://github.com/James3014/repository-intelligence-engine/actions/runs/35036708949",
+        "https://github.com/James3014/repository-intelligence-engine/releases/tag/v0.1.2"
+      ],
+      "report_observation": {
+        "claim_ceiling": "ADVISORY_EVIDENCE_ONLY",
+        "readiness": "REVIEW_READY",
+        "evidence_completeness": "COMPLETE",
+        "cfi_status": "NO_TERMINAL_FAILURE",
+        "eia_decision": "NO_ACTION",
+        "run_id": 35036708949,
+        "artifact_id": 10423367453,
+        "artifact_digest": "sha256:71f13ce6d88e75be96ea721e70ca9027ee6af8c33235e2bef875b0b858d43530",
+        "content_sha256": "18eb4f13b0457afacc2ab02a2b4cf5b576089bc3fceaadc02b52bee2d05ca0de"
+      },
+      "terminal_observation": {
+        "action_ref": "7d7a0e375f0b7be7b57d96653a4064fd379231eb",
+        "claim_ceiling": "ADVISORY_EVIDENCE_ONLY",
+        "snapshot_semantics": "OBSERVED_CHECK_SET_TERMINAL_AFTER_QUIESCENCE",
+        "expected_head_sha": "a8c502fe809dca39385aacafd595ea36b8b5700c",
+        "run_id": 35036708949,
+        "artifact_id": 10424175091,
+        "artifact_digest": "sha256:962191c45151a751d74c00ec6bdd154095ee99fdf51029f3747a85f612e3a4e9",
+        "content_sha256": "d64d85b51bd6212b0ba9ea5d447184b5be2d46f34eb82a0206abe241db0fdb7b",
+        "observed_external_check_count": 1,
+        "readiness": "REVIEW_READY",
+        "cfi_status": "NO_TERMINAL_FAILURE",
+        "eia_decision": "NO_ACTION"
+      },
+      "supported_claim": "RIE PR #25 produced both an exact-head PR-event snapshot and a stable terminal observed-check artifact before the v0.1.2 release was published from the merged Candidate.",
+      "non_claims": [
+        "The terminal witness does not prove repository required-check completeness.",
+        "The release Candidate witness does not grant Candidate acceptance or merge authority.",
+        "The terminal action was commit-pinned in this self-canary; this case does not claim that PR #25 consumed the later-created v0.1.2 tag."
+      ]
+    },
+    {
+      "case_id": "OPENCLI-31-TERMINAL-CI-FAILURE",
+      "kind": "FAILURE_CASE",
+      "evidence_class": "LIVE_FLEET_DOGFOOD",
+      "status": "FIXED",
+      "failure_family": "UNEXPECTED_TERMINAL_CI_FAILURE",
+      "repository": "James3014/nexus-opencli-reviewer",
+      "pr_number": 31,
+      "head_sha": "7ddea3ad4b56407ada724e9fb687eb4a7561dbd7",
+      "base_sha": "502d16add60b124716af96888e1feeddb5fba6bd",
+      "current_main_sha": "502d16add60b124716af96888e1feeddb5fba6bd",
+      "observed_at": "2026-09-15T23:46:32Z",
+      "evidence_refs": [
+        "https://github.com/James3014/nexus-opencli-reviewer/pull/31",
+        "https://github.com/James3014/nexus-opencli-reviewer/actions/runs/35037059986"
+      ],
+      "report_observation": {
+        "claim_ceiling": "ADVISORY_EVIDENCE_ONLY",
+        "readiness": "REVIEW_READY",
+        "evidence_completeness": "COMPLETE",
+        "cfi_status": "NO_TERMINAL_FAILURE",
+        "eia_decision": "NO_ACTION",
+        "run_id": 35037059986,
+        "artifact_id": 10423697055,
+        "artifact_digest": "sha256:e144ee63451db05c9a998d020288fde3b8dc183d8e8f1dc665b2135487ea7ed2",
+        "content_sha256": "def32e2de66fb1265ffff55bd54352bacf1ed502e1f3ba7500937c5e58d2579b"
+      },
+      "terminal_observation": {
+        "action_ref": "v0.1.2",
+        "claim_ceiling": "ADVISORY_EVIDENCE_ONLY",
+        "snapshot_semantics": "OBSERVED_CHECK_SET_TERMINAL_AFTER_QUIESCENCE",
+        "expected_head_sha": "7ddea3ad4b56407ada724e9fb687eb4a7561dbd7",
+        "run_id": 35037059986,
+        "artifact_id": 10424050547,
+        "artifact_digest": "sha256:6c80d5f767b80c49e7a8efd8f3ff039c146338b3888727cd20dc2d6fe695b45a",
+        "content_sha256": "d9132d16a6de6ec4b8bf770507105ed7921a8ddcef36de0090abf6f418b394d4",
+        "observed_external_check_count": 1,
+        "readiness": "REVIEW_READY",
+        "cfi_status": "UNEXPECTED_FAILURE_OBSERVED",
+        "eia_decision": "READY"
+      },
+      "supported_claim": "OpenCLI reviewer PR #31 demonstrated the timing distinction in live use: the PR-event snapshot saw no terminal failure, while the later v0.1.2 terminal observation captured an unexpected external CI failure on the same exact head; a subsequent head repaired that CI failure.",
+      "non_claims": [
+        "EIA READY is advisory eligibility only and did not dispatch a worker.",
+        "This does not prove root cause from Repository Intelligence alone.",
+        "FIXED refers to the exact PR failure being corrected on a later head, not fleet-wide eradication of this failure family."
+      ]
+    },
+    {
+      "case_id": "OPENCLI-31-TERMINAL-FINAL",
+      "kind": "OPERATING_WITNESS",
+      "evidence_class": "LIVE_FLEET_DOGFOOD",
+      "status": "POSITIVE",
+      "failure_family": null,
+      "repository": "James3014/nexus-opencli-reviewer",
+      "pr_number": 31,
+      "head_sha": "deb5143180f4dfcfb7755988778e8ad2a9179bbc",
+      "base_sha": "502d16add60b124716af96888e1feeddb5fba6bd",
+      "current_main_sha": "502d16add60b124716af96888e1feeddb5fba6bd",
+      "observed_at": "2026-09-15T23:47:44Z",
+      "evidence_refs": [
+        "https://github.com/James3014/nexus-opencli-reviewer/pull/31",
+        "https://github.com/James3014/nexus-opencli-reviewer/actions/runs/35037181503",
+        "https://github.com/James3014/nexus-opencli-reviewer/commit/deb5143180f4dfcfb7755988778e8ad2a9179bbc"
+      ],
+      "report_observation": {
+        "claim_ceiling": "ADVISORY_EVIDENCE_ONLY",
+        "readiness": "REVIEW_READY",
+        "evidence_completeness": "COMPLETE",
+        "cfi_status": "NO_TERMINAL_FAILURE",
+        "eia_decision": "NO_ACTION",
+        "run_id": 35037181503,
+        "artifact_id": 10423334927,
+        "artifact_digest": "sha256:337d4504ca689c5c9a0a9833996b6a7dc8cf744346e3d065d3890b59625ef425",
+        "content_sha256": "b683e57b6dd3069216c81c4e41930e28832568957d4e7f0e7c2e0d6521aec943"
+      },
+      "terminal_observation": {
+        "action_ref": "v0.1.2",
+        "claim_ceiling": "ADVISORY_EVIDENCE_ONLY",
+        "snapshot_semantics": "OBSERVED_CHECK_SET_TERMINAL_AFTER_QUIESCENCE",
+        "expected_head_sha": "deb5143180f4dfcfb7755988778e8ad2a9179bbc",
+        "run_id": 35037181503,
+        "artifact_id": 10423602713,
+        "artifact_digest": "sha256:af46e3e46b65ca6043912c38cf90a4bd9431597bb903158b2faaedb255b3a2fd",
+        "content_sha256": "35324143f806b5f9d177aed82debaad600533dee73d5a26c4a6adac129f8bc94",
+        "observed_external_check_count": 1,
+        "readiness": "REVIEW_READY",
+        "cfi_status": "NO_TERMINAL_FAILURE",
+        "eia_decision": "NO_ACTION"
+      },
+      "supported_claim": "After the PR #31 CI repair, the final exact head produced successful v0.1.2 snapshot and terminal artifacts and the repository CI also completed successfully before merge.",
+      "non_claims": [
+        "The terminal witness does not infer which repository checks are required.",
+        "A successful observed external check set is not Candidate acceptance or merge authority.",
+        "This is first-party fleet dogfooding, not third-party adoption."
+      ]
     }
   ],
   "fleet": [
@@ -194,56 +340,80 @@
       "sidecar_integrated": true,
       "evidence_state": "CANARY_ONLY",
       "latest_case_id": null,
-      "note": "Permanent sidecar integration is merged; this corpus does not yet claim a separately inspected post-rollout artifact after that merge."
+      "note": "Permanent sidecar integration is merged; this corpus does not yet claim a separately inspected post-rollout artifact after that merge.",
+      "terminal_sidecar_integrated": true,
+      "terminal_evidence_state": "NONE",
+      "latest_terminal_case_id": null
     },
     {
       "repository": "James3014/devspace",
       "sidecar_integrated": true,
       "evidence_state": "FAILURE_WITNESS",
       "latest_case_id": "DEVSPACE-171-POST-ROLLOUT",
-      "note": "Contains a real STALE_BASE failure witness and a later post-rollout positive operating witness."
+      "note": "Contains a real STALE_BASE failure witness and a later post-rollout positive operating witness.",
+      "terminal_sidecar_integrated": true,
+      "terminal_evidence_state": "NONE",
+      "latest_terminal_case_id": null
     },
     {
       "repository": "James3014/nexus-core",
       "sidecar_integrated": true,
       "evidence_state": "CANARY_ONLY",
       "latest_case_id": null,
-      "note": "Initial fleet canary/integration evidence exists; no additional post-rollout case is asserted here."
+      "note": "Initial fleet canary/integration evidence exists; no additional post-rollout case is asserted here.",
+      "terminal_sidecar_integrated": true,
+      "terminal_evidence_state": "NONE",
+      "latest_terminal_case_id": null
     },
     {
       "repository": "James3014/nexus-learning",
       "sidecar_integrated": true,
       "evidence_state": "CANARY_ONLY",
       "latest_case_id": null,
-      "note": "Initial fleet canary/integration evidence exists; no additional post-rollout case is asserted here."
+      "note": "Initial fleet canary/integration evidence exists; no additional post-rollout case is asserted here.",
+      "terminal_sidecar_integrated": true,
+      "terminal_evidence_state": "NONE",
+      "latest_terminal_case_id": null
     },
     {
       "repository": "James3014/nexus-open-swe-runtime",
       "sidecar_integrated": true,
       "evidence_state": "CANARY_ONLY",
       "latest_case_id": null,
-      "note": "Initial fleet canary/integration evidence exists; no additional post-rollout case is asserted here."
+      "note": "Initial fleet canary/integration evidence exists; no additional post-rollout case is asserted here.",
+      "terminal_sidecar_integrated": true,
+      "terminal_evidence_state": "NONE",
+      "latest_terminal_case_id": null
     },
     {
       "repository": "James3014/repository-intelligence-engine",
       "sidecar_integrated": true,
       "evidence_state": "POST_ROLLOUT_WITNESS",
-      "latest_case_id": "RIE-17-POST-ROLLOUT",
-      "note": "Self-dogfooding post-rollout witness is recorded; PR #17 also has a separate source-forensics failure-family case."
+      "latest_case_id": "RIE-25-TERMINAL-RELEASE-CANDIDATE",
+      "note": "Self-dogfooding includes an exact-head terminal observation witness on the v0.1.2 release Candidate.",
+      "terminal_sidecar_integrated": true,
+      "terminal_evidence_state": "POST_ROLLOUT_WITNESS",
+      "latest_terminal_case_id": "RIE-25-TERMINAL-RELEASE-CANDIDATE"
     },
     {
       "repository": "James3014/nexus-runtime",
       "sidecar_integrated": true,
       "evidence_state": "CANARY_ONLY",
       "latest_case_id": null,
-      "note": "Initial fleet canary/integration evidence exists; no additional post-rollout case is asserted here."
+      "note": "Initial fleet canary/integration evidence exists; no additional post-rollout case is asserted here.",
+      "terminal_sidecar_integrated": true,
+      "terminal_evidence_state": "NONE",
+      "latest_terminal_case_id": null
     },
     {
       "repository": "James3014/nexus-opencli-reviewer",
       "sidecar_integrated": true,
-      "evidence_state": "CANARY_ONLY",
-      "latest_case_id": null,
-      "note": "Canonical sidecar coexists with the legacy reviewer path; no additional post-rollout case is asserted here."
+      "evidence_state": "FAILURE_WITNESS",
+      "latest_case_id": "OPENCLI-31-TERMINAL-FINAL",
+      "note": "The v0.1.2 consumer observed a real unexpected terminal CI failure on PR #31 and a later exact-head terminal-success witness before merge.",
+      "terminal_sidecar_integrated": true,
+      "terminal_evidence_state": "FAILURE_WITNESS",
+      "latest_terminal_case_id": "OPENCLI-31-TERMINAL-FINAL"
     }
   ]
 }

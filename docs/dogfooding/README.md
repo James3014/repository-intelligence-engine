@@ -36,6 +36,8 @@ A case retains, when the evidence supports them:
 - one bounded supported claim;
 - explicit non-claims.
 
+When a physically inspected terminal bundle exists, the same case may also retain a `terminal_observation` object containing the exact action ref, expected head, terminal semantics, run/artifact identity, artifact digest, bundle content hash, observed external-check count, and advisory result fields. Terminal fields are optional because missing evidence stays missing; when present, the validator binds them back to the case head and fails closed on authority escalation or malformed hashes.
+
 Missing evidence stays missing. Do not fabricate a run ID, artifact digest, source SHA, occurrence rate, or external-adoption claim merely to make the matrix look complete.
 
 ## Failure families
@@ -75,14 +77,14 @@ python3 -m pytest -q tests/test_dogfooding_corpus.py
 
 ## Candidate extraction from RIE artifacts
 
-The validator can inspect an already-downloaded `repository-intelligence.json` bundle without mutating either the corpus or GitHub:
+The validator can inspect an already-downloaded root `repository-intelligence.json` snapshot bundle or `repository-intelligence-terminal.json` terminal bundle without mutating either the corpus or GitHub:
 
 ```bash
 python3 scripts/validate_dogfooding_corpus.py \
   --extract-report /path/to/repository-intelligence.json
 ```
 
-It emits candidate observations only for report-visible families currently supported by the extractor:
+It emits candidate observations only for report-visible families currently supported by the extractor. Terminal bundles are unwrapped only after their advisory ceiling, terminal semantics, and outer/inner review identity agree; extracted terminal candidates are marked `TERMINAL_OBSERVED_CHECK_SET`:
 
 - `STALE_BASE`
 - `EVIDENCE_INCOMPLETE`

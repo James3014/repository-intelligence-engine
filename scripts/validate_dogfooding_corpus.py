@@ -24,6 +24,10 @@ EVIDENCE_CLASSES = {
 }
 CASE_KINDS = {"FAILURE_CASE", "OPERATING_WITNESS"}
 CASE_STATUSES = {"OPEN", "FIXED", "OBSERVED", "POSITIVE"}
+TERMINAL_SEMANTICS = "OBSERVED_CHECK_SET_TERMINAL_AFTER_QUIESCENCE"
+TERMINAL_EVIDENCE_STATES = {"NONE", "POST_ROLLOUT_WITNESS", "FAILURE_WITNESS"}
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+ARTIFACT_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 CASE_ID_RE = re.compile(r"^[A-Z0-9][A-Z0-9._-]{2,127}$")
 EXPECTED_FLEET = {
@@ -141,8 +145,36 @@ def validate_corpus(data: Any) -> list[str]:
                     if report.get("evidence_completeness") not in {"COMPLETE", "INCOMPLETE"}:
                         errors.append(f"{prefix}.report_observation.evidence_completeness is invalid")
                     digest = report.get("content_sha256")
-                    if digest is not None and (not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+                    if digest is not None and (not isinstance(digest, str) or not SHA256_RE.fullmatch(digest)):
                         errors.append(f"{prefix}.report_observation.content_sha256 is invalid")
+
+            terminal = case.get("terminal_observation")
+            if terminal is not None:
+                if not isinstance(terminal, dict):
+                    errors.append(f"{prefix}.terminal_observation must be an object")
+                else:
+                    if terminal.get("claim_ceiling") != "ADVISORY_EVIDENCE_ONLY":
+                        errors.append(f"{prefix}.terminal_observation.claim_ceiling must remain advisory")
+                    if terminal.get("snapshot_semantics") != TERMINAL_SEMANTICS:
+                        errors.append(f"{prefix}.terminal_observation.snapshot_semantics is invalid")
+                    if not _is_nonempty_string(terminal.get("action_ref")):
+                        errors.append(f"{prefix}.terminal_observation.action_ref must be non-empty")
+                    if not isinstance(terminal.get("run_id"), int) or isinstance(terminal.get("run_id"), bool) or terminal["run_id"] <= 0:
+                        errors.append(f"{prefix}.terminal_observation.run_id must be a positive integer")
+                    if not isinstance(terminal.get("artifact_id"), int) or isinstance(terminal.get("artifact_id"), bool) or terminal["artifact_id"] <= 0:
+                        errors.append(f"{prefix}.terminal_observation.artifact_id must be a positive integer")
+                    artifact_digest = terminal.get("artifact_digest")
+                    if not isinstance(artifact_digest, str) or not ARTIFACT_DIGEST_RE.fullmatch(artifact_digest):
+                        errors.append(f"{prefix}.terminal_observation.artifact_digest is invalid")
+                    content_digest = terminal.get("content_sha256")
+                    if not isinstance(content_digest, str) or not SHA256_RE.fullmatch(content_digest):
+                        errors.append(f"{prefix}.terminal_observation.content_sha256 is invalid")
+                    expected_head = terminal.get("expected_head_sha")
+                    if not _is_sha(expected_head) or expected_head != case.get("head_sha"):
+                        errors.append(f"{prefix}.terminal_observation.expected_head_sha must match case head_sha")
+                    observed_count = terminal.get("observed_external_check_count")
+                    if not isinstance(observed_count, int) or isinstance(observed_count, bool) or observed_count <= 0:
+                        errors.append(f"{prefix}.terminal_observation.observed_external_check_count must be positive")
 
             if case.get("failure_family") == "STALE_BASE":
                 base_sha = case.get("base_sha")
@@ -167,11 +199,23 @@ def validate_corpus(data: Any) -> list[str]:
                 seen_repos.add(repository)
             if row.get("sidecar_integrated") is not True:
                 errors.append(f"{prefix}.sidecar_integrated must be true for the completed fleet")
+            if row.get("terminal_sidecar_integrated") is not True:
+                errors.append(f"{prefix}.terminal_sidecar_integrated must be true for the completed fleet")
             if row.get("evidence_state") not in {"CANARY_ONLY", "POST_ROLLOUT_WITNESS", "FAILURE_WITNESS"}:
                 errors.append(f"{prefix}.evidence_state is invalid")
+            if row.get("terminal_evidence_state") not in TERMINAL_EVIDENCE_STATES:
+                errors.append(f"{prefix}.terminal_evidence_state is invalid")
             latest_case_id = row.get("latest_case_id")
             if latest_case_id is not None and latest_case_id not in case_ids:
                 errors.append(f"{prefix}.latest_case_id must reference a declared case")
+            latest_terminal_case_id = row.get("latest_terminal_case_id")
+            if latest_terminal_case_id is not None:
+                if latest_terminal_case_id not in case_ids:
+                    errors.append(f"{prefix}.latest_terminal_case_id must reference a declared case")
+                else:
+                    terminal_case = next((item for item in cases if isinstance(item, dict) and item.get("case_id") == latest_terminal_case_id), None)
+                    if not isinstance(terminal_case, dict) or not isinstance(terminal_case.get("terminal_observation"), dict):
+                        errors.append(f"{prefix}.latest_terminal_case_id must reference a terminal-observation case")
         if seen_repos != EXPECTED_FLEET:
             missing = sorted(EXPECTED_FLEET - seen_repos)
             extra = sorted(seen_repos - EXPECTED_FLEET)
@@ -181,12 +225,27 @@ def validate_corpus(data: Any) -> list[str]:
 
 
 def extract_report_candidates(report: Any) -> list[dict[str, Any]]:
-    """Return mutation-free candidate observations from one RIE cloud bundle."""
+    """Return mutation-free candidate observations from a snapshot or terminal RIE bundle."""
     if not isinstance(report, dict):
         raise ValueError("report must be a JSON object")
     if report.get("claim_ceiling") != "ADVISORY_EVIDENCE_ONLY":
         raise ValueError("report claim ceiling is not ADVISORY_EVIDENCE_ONLY")
-    identity = report.get("review_identity")
+
+    observation_surface = "PR_EVENT_SNAPSHOT"
+    source_report = report
+    if report.get("schema") == "reviewer.repository_intelligence_terminal_cloud.v1":
+        if report.get("snapshot_semantics") != TERMINAL_SEMANTICS:
+            raise ValueError("terminal report snapshot semantics are invalid")
+        source_report = report.get("cloud_bundle")
+        if not isinstance(source_report, dict):
+            raise ValueError("terminal report cloud_bundle is missing")
+        if source_report.get("claim_ceiling") != "ADVISORY_EVIDENCE_ONLY":
+            raise ValueError("terminal inner report claim ceiling is not ADVISORY_EVIDENCE_ONLY")
+        if source_report.get("review_identity") != report.get("review_identity"):
+            raise ValueError("terminal report identity does not match inner cloud bundle")
+        observation_surface = "TERMINAL_OBSERVED_CHECK_SET"
+
+    identity = source_report.get("review_identity")
     if not isinstance(identity, list) or len(identity) != 5:
         raise ValueError("report review_identity must contain five fields")
     repository, pr_number, head_sha, base_sha, current_main_sha = identity
@@ -195,7 +254,7 @@ def extract_report_candidates(report: Any) -> list[dict[str, Any]]:
     if not all(_is_sha(value) for value in (head_sha, base_sha, current_main_sha)):
         raise ValueError("report identity SHAs must be exact 40-character lowercase SHAs")
 
-    reports = report.get("reports")
+    reports = source_report.get("reports")
     if not isinstance(reports, dict):
         raise ValueError("report reports envelope is missing")
     readiness = reports.get("readiness", {}).get("result", {})
@@ -208,6 +267,8 @@ def extract_report_candidates(report: Any) -> list[dict[str, Any]]:
         "base_sha": base_sha,
         "current_main_sha": current_main_sha,
     }
+    if observation_surface != "PR_EVENT_SNAPSHOT":
+        common["observation_surface"] = observation_surface
     findings = readiness.get("findings", []) if isinstance(readiness, dict) else []
     if readiness.get("disposition") == "STALE" and "STALE_BASE" in findings:
         candidates.append({**common, "failure_family": "STALE_BASE", "evidence_class": "LIVE_FLEET_DOGFOOD"})
