@@ -29,11 +29,17 @@ class FakeGitHubAPI:
         ]
         self.commit_statuses = commit_statuses if commit_statuses is not None else [
             {
+                # GitHub's documented list-commit-statuses response carries
+                # the subject in the status URL; it does not include sha.
                 "id": 301,
                 "context": "ci/test",
                 "state": "success",
-                "sha": "b" * 40,
+                "url": "https://api.github.com/repos/owner/repo/statuses/" + "b" * 40,
                 "target_url": "https://example.invalid/status/301",
+                "commit_url": "https://api.github.com/repos/owner/repo/commits/" + "b" * 40,
+                "created_at": "2026-08-30T01:00:00Z",
+                "updated_at": "2026-08-30T01:01:00Z",
+                "creator": {"login": "github-actions[bot]"},
             }
         ]
         self.check_error = check_error
@@ -167,14 +173,42 @@ def _check_run(status: str = "success") -> dict:
     }
 
 
-def _commit_status(context: str, state: str, *, status_id: int, sha: str = "b" * 40) -> dict:
-    return {
+def _commit_status(
+    context: str,
+    state: str,
+    *,
+    status_id: int,
+    sha: str | None = None,
+    url_sha: str | None = None,
+    url: str | None = None,
+) -> dict:
+    row = {
         "id": status_id,
         "context": context,
         "state": state,
-        "sha": sha,
+        "url": url
+        or "https://api.github.com/repos/owner/repo/statuses/"
+        + (url_sha or sha or "b" * 40),
         "target_url": f"https://example.invalid/status/{status_id}",
     }
+    if sha is not None:
+        row["sha"] = sha
+    return row
+
+
+def test_authentic_commit_status_without_sha_binds_to_requested_head():
+    snapshot = gha.collect_pr_snapshot(
+        FakeGitHubAPI(
+            check_runs=[_check_run("success")],
+            commit_statuses=[_commit_status("ci/test", "failure", status_id=409)],
+        ),
+        "owner/repo",
+        7,
+    )
+
+    status = snapshot["checks"][1]
+    assert status["head_sha"] == "b" * 40
+    assert snapshot["collection_complete"] is True
 
 
 def test_commit_status_failure_is_terminal_and_ready_for_advisory_diagnosis():
@@ -308,3 +342,105 @@ def test_foreign_head_commit_status_is_not_accepted_as_current_evidence():
         for check in snapshot["checks"]
     )
     assert cfi["status"] == "INSUFFICIENT_EVIDENCE"
+
+
+def test_foreign_url_commit_status_is_not_accepted_as_current_evidence():
+    snapshot = gha.collect_pr_snapshot(
+        FakeGitHubAPI(
+            check_runs=[_check_run("success")],
+            commit_statuses=[
+                _commit_status("ci/test", "failure", status_id=410, url_sha="f" * 40),
+            ],
+        ),
+        "owner/repo",
+        7,
+    )
+    cfi = gha.analyze_ci_failure_intelligence(snapshot).to_dict()
+
+    assert snapshot["collection_complete"] is False
+    assert not any(
+        str(check.get("external_id", "")).startswith("github_commit_status:")
+        for check in snapshot["checks"]
+    )
+    assert cfi["status"] == "INSUFFICIENT_EVIDENCE"
+
+
+@pytest.mark.parametrize(
+    ("case", "status_url"),
+    [
+        ("malformed_url", "https://[broken"),
+        (
+            "foreign_host",
+            "https://evil.example/repos/owner/repo/statuses/" + "b" * 40,
+        ),
+        (
+            "userinfo",
+            "https://attacker@api.github.com/repos/owner/repo/statuses/" + "b" * 40,
+        ),
+        (
+            "query",
+            "https://api.github.com/repos/owner/repo/statuses/" + "b" * 40 + "?raw=1",
+        ),
+        (
+            "fragment",
+            "https://api.github.com/repos/owner/repo/statuses/" + "b" * 40 + "#status",
+        ),
+        (
+            "wrong_repository",
+            "https://api.github.com/repos/other/repo/statuses/" + "b" * 40,
+        ),
+        (
+            "wrong_head",
+            "https://api.github.com/repos/owner/repo/statuses/" + "f" * 40,
+        ),
+    ],
+)
+def test_status_url_mismatch_is_incomplete_and_never_current(case, status_url):
+    snapshot = gha.collect_pr_snapshot(
+        FakeGitHubAPI(
+            check_runs=[_check_run("success")],
+            commit_statuses=[_commit_status("ci/test", "failure", status_id=411, url=status_url)],
+        ),
+        "owner/repo",
+        7,
+    )
+    cfi = gha.analyze_ci_failure_intelligence(snapshot).to_dict()
+
+    assert snapshot["collection_complete"] is False, case
+    assert any("commit_statuses: url" in error for error in snapshot["collection_errors"])
+    assert not any(
+        str(check.get("external_id", "")).startswith("github_commit_status:")
+        for check in snapshot["checks"]
+    )
+    assert cfi["status"] == "INSUFFICIENT_EVIDENCE"
+
+
+@pytest.mark.parametrize(
+    ("api_url", "status_url"),
+    [
+        (
+            "https://api.github.com",
+            "https://api.github.com/repos/owner/repo/statuses/" + "b" * 40,
+        ),
+        (
+            "https://api.github.com",
+            "https://api.github.com/repos/Owner/Repo/statuses/" + "b" * 40,
+        ),
+        (
+            "https://ghe.example/api/v3",
+            "https://ghe.example/api/v3/repos/owner/repo/statuses/" + "b" * 40,
+        ),
+    ],
+)
+def test_documented_status_url_shapes_bind_to_requested_head(api_url, status_url):
+    api = FakeGitHubAPI(
+        check_runs=[_check_run("success")],
+        commit_statuses=[_commit_status("ci/test", "failure", status_id=412, url=status_url)],
+    )
+    api.api_url = api_url
+
+    snapshot = gha.collect_pr_snapshot(api, "owner/repo", 7)
+
+    assert snapshot["collection_complete"] is True
+    assert snapshot["checks"][1]["external_id"] == "github_commit_status:412"
+    assert snapshot["checks"][1]["head_sha"] == "b" * 40
