@@ -1,0 +1,249 @@
+{
+  "schema": "repository_intelligence.dogfooding_corpus.v1",
+  "claim_ceiling": "OBSERVATIONAL_EVIDENCE_ONLY",
+  "source_issue": 18,
+  "observed_through": "2026-09-16T05:44:00+08:00",
+  "evidence_classes": [
+    "LIVE_FLEET_DOGFOOD",
+    "CONTROLLED_REPRODUCTION",
+    "SOURCE_FORENSICS"
+  ],
+  "failure_families": [
+    {
+      "id": "STALE_BASE",
+      "description": "The PR base identity is older than the observed current default-branch identity."
+    },
+    {
+      "id": "COMMIT_STATUS_CHANNEL_OMISSION",
+      "description": "GitHub Commit Status evidence is omitted while CI collection is still represented as complete."
+    },
+    {
+      "id": "COMMIT_STATUS_HEAD_BINDING",
+      "description": "Commit Status rows need deterministic binding to the exact commit-scoped query subject when the REST row omits sha."
+    },
+    {
+      "id": "EVIDENCE_INCOMPLETE",
+      "description": "Required repository or CI evidence cannot be collected or trusted completely."
+    },
+    {
+      "id": "UNEXPECTED_TERMINAL_CI_FAILURE",
+      "description": "Complete exact-head CI evidence contains at least one unexpected terminal failure."
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "DEVSPACE-158-STALE-BASE",
+      "kind": "FAILURE_CASE",
+      "evidence_class": "LIVE_FLEET_DOGFOOD",
+      "status": "FIXED",
+      "failure_family": "STALE_BASE",
+      "repository": "James3014/devspace",
+      "pr_number": 158,
+      "head_sha": "bf861030ec16eace9f3380a383cd759d8e805f27",
+      "base_sha": "80f4aaff91a34ae11857663348be27a60efb49bd",
+      "current_main_sha": "b2e9331f0ed84b5e8902ef322b9e391b8d07c0ed",
+      "observed_at": "2026-09-15T06:33:13Z",
+      "evidence_refs": [
+        "https://github.com/James3014/devspace/pull/158",
+        "https://github.com/James3014/devspace/commit/bf861030ec16eace9f3380a383cd759d8e805f27",
+        "https://github.com/James3014/devspace/pull/160"
+      ],
+      "report_observation": {
+        "claim_ceiling": "ADVISORY_EVIDENCE_ONLY",
+        "readiness": "STALE",
+        "evidence_completeness": "COMPLETE",
+        "eia_decision": "BLOCKED"
+      },
+      "supported_claim": "A real fleet canary became stale after devspace main advanced; Repository Intelligence surfaced the stale base and blocked advisory automation, and the integration was recreated as fresh PR #160 before merge.",
+      "non_claims": [
+        "This does not establish fleet-wide stale-base incidence.",
+        "This does not establish merge readiness or acceptance authority.",
+        "FIXED refers to the rollout subject being recreated against a fresh base, not to a new engine semantic repair."
+      ]
+    },
+    {
+      "case_id": "RIE-ISSUE10-COMMIT-STATUS-OMISSION",
+      "kind": "FAILURE_CASE",
+      "evidence_class": "CONTROLLED_REPRODUCTION",
+      "status": "FIXED",
+      "failure_family": "COMMIT_STATUS_CHANNEL_OMISSION",
+      "repository": "James3014/repository-intelligence-engine",
+      "pr_number": 11,
+      "head_sha": "9423695ed1628d7a0aa89885cb45438119a1f7f1",
+      "base_sha": "282e26255577dde2c4d542f75ee12628c9b55490",
+      "current_main_sha": null,
+      "observed_at": "2026-09-13T02:23:25Z",
+      "evidence_refs": [
+        "https://github.com/James3014/repository-intelligence-engine/issues/10",
+        "https://github.com/James3014/repository-intelligence-engine/pull/11"
+      ],
+      "supported_claim": "A source-bound controlled GitHub API reproduction showed that collecting Check Runs without Commit Statuses could produce COMPLETE / NO_TERMINAL_FAILURE while a failing Commit Status existed; PR #11 repaired that acquisition gap.",
+      "non_claims": [
+        "This is controlled reproduction, not observed fleet incidence.",
+        "It does not establish how often repositories use Commit Statuses.",
+        "It does not grant merge, release, or production authority."
+      ]
+    },
+    {
+      "case_id": "RIE-PR17-COMMIT-STATUS-HEAD-BINDING",
+      "kind": "FAILURE_CASE",
+      "evidence_class": "SOURCE_FORENSICS",
+      "status": "OPEN",
+      "failure_family": "COMMIT_STATUS_HEAD_BINDING",
+      "repository": "James3014/repository-intelligence-engine",
+      "pr_number": 17,
+      "head_sha": "6e53fd6b9f3385b2180d54d3e32d9dafac973a5c",
+      "base_sha": "ea4b30403aac999b905c7a6e7213eb78dd6d8220",
+      "current_main_sha": "ea4b30403aac999b905c7a6e7213eb78dd6d8220",
+      "observed_at": "2026-09-15T14:17:05Z",
+      "evidence_refs": [
+        "https://github.com/James3014/repository-intelligence-engine/pull/17",
+        "https://github.com/James3014/repository-intelligence-engine/actions/runs/34980563204"
+      ],
+      "report_observation": {
+        "claim_ceiling": "ADVISORY_EVIDENCE_ONLY",
+        "readiness": "REVIEW_READY",
+        "evidence_completeness": "COMPLETE",
+        "cfi_status": "NO_TERMINAL_FAILURE",
+        "run_id": 34980563204,
+        "artifact_id": 10401261505,
+        "artifact_digest": "sha256:b9399f8a8c105b3442da051a0fd569c9526e3af56cf9cb8cbe2194272e125964",
+        "content_sha256": "62ef07f62b20b737d4ee468a3e1638d7d6ff2c175a98488e85badc4400f19c2a"
+      },
+      "supported_claim": "Current source forensics identified that documented GitHub REST Commit Status list rows normally omit sha; PR #17 proposes exact query-subject/status-URL binding and has exact-head hosted CI plus a valid advisory RIE artifact.",
+      "non_claims": [
+        "PR #17 is not merged or accepted by this corpus record.",
+        "This is source-forensics evidence, not a live foreign-head fleet incident.",
+        "The positive RIE artifact for PR #17 does not prove the proposed adapter repair correct."
+      ]
+    },
+    {
+      "case_id": "DEVSPACE-171-POST-ROLLOUT",
+      "kind": "OPERATING_WITNESS",
+      "evidence_class": "LIVE_FLEET_DOGFOOD",
+      "status": "POSITIVE",
+      "failure_family": null,
+      "repository": "James3014/devspace",
+      "pr_number": 171,
+      "head_sha": "0eac76ec2e6b05d5cb668b9ae648a52dc3a2ff58",
+      "base_sha": "9e83ad5844ff55d32f495e8aded5a36e8ad91c07",
+      "current_main_sha": "9e83ad5844ff55d32f495e8aded5a36e8ad91c07",
+      "observed_at": "2026-09-15T21:26:07Z",
+      "evidence_refs": [
+        "https://github.com/James3014/devspace/pull/171",
+        "https://github.com/James3014/devspace/actions/runs/35025580873"
+      ],
+      "report_observation": {
+        "claim_ceiling": "ADVISORY_EVIDENCE_ONLY",
+        "readiness": "REVIEW_READY",
+        "evidence_completeness": "COMPLETE",
+        "cfi_status": "NO_TERMINAL_FAILURE",
+        "total_checks_count": 12,
+        "eia_decision": "NO_ACTION",
+        "run_id": 35025580873,
+        "artifact_id": 10419078098,
+        "artifact_digest": "sha256:981b67e395ac950de7c634d7cb9479e3aeccd2769207273abb0fb8eb7f1e2603",
+        "content_sha256": "b8efb456a909408bd40c85b2b476cbb3d4ad90adefa15dbf99597aa162b3e4eb"
+      },
+      "supported_claim": "After permanent fleet rollout, devspace PR #171 produced an exact-head, COMPLETE, REVIEW_READY Repository Intelligence artifact alongside successful repository CI.",
+      "non_claims": [
+        "NO_TERMINAL_FAILURE in the PR-event snapshot is not a terminal-CI verdict.",
+        "This does not grant Candidate acceptance or merge authority.",
+        "This does not establish external third-party adoption."
+      ]
+    },
+    {
+      "case_id": "RIE-17-POST-ROLLOUT",
+      "kind": "OPERATING_WITNESS",
+      "evidence_class": "LIVE_FLEET_DOGFOOD",
+      "status": "POSITIVE",
+      "failure_family": null,
+      "repository": "James3014/repository-intelligence-engine",
+      "pr_number": 17,
+      "head_sha": "6e53fd6b9f3385b2180d54d3e32d9dafac973a5c",
+      "base_sha": "ea4b30403aac999b905c7a6e7213eb78dd6d8220",
+      "current_main_sha": "ea4b30403aac999b905c7a6e7213eb78dd6d8220",
+      "observed_at": "2026-09-15T14:17:05Z",
+      "evidence_refs": [
+        "https://github.com/James3014/repository-intelligence-engine/pull/17",
+        "https://github.com/James3014/repository-intelligence-engine/actions/runs/34980563204"
+      ],
+      "report_observation": {
+        "claim_ceiling": "ADVISORY_EVIDENCE_ONLY",
+        "readiness": "REVIEW_READY",
+        "evidence_completeness": "COMPLETE",
+        "cfi_status": "NO_TERMINAL_FAILURE",
+        "total_checks_count": 3,
+        "eia_decision": "NO_ACTION",
+        "run_id": 34980563204,
+        "artifact_id": 10401261505,
+        "artifact_digest": "sha256:b9399f8a8c105b3442da051a0fd569c9526e3af56cf9cb8cbe2194272e125964",
+        "content_sha256": "62ef07f62b20b737d4ee468a3e1638d7d6ff2c175a98488e85badc4400f19c2a"
+      },
+      "supported_claim": "Repository Intelligence self-dogfooding continued after permanent rollout: PR #17 produced a valid exact-head advisory artifact and hosted RIE workflow success.",
+      "non_claims": [
+        "The artifact does not independently validate PR #17's code change.",
+        "This is not a terminal-CI or merge-readiness verdict.",
+        "This does not establish broad external adoption."
+      ]
+    }
+  ],
+  "fleet": [
+    {
+      "repository": "James3014/Nexus-new",
+      "sidecar_integrated": true,
+      "evidence_state": "CANARY_ONLY",
+      "latest_case_id": null,
+      "note": "Permanent sidecar integration is merged; this corpus does not yet claim a separately inspected post-rollout artifact after that merge."
+    },
+    {
+      "repository": "James3014/devspace",
+      "sidecar_integrated": true,
+      "evidence_state": "FAILURE_WITNESS",
+      "latest_case_id": "DEVSPACE-171-POST-ROLLOUT",
+      "note": "Contains a real STALE_BASE failure witness and a later post-rollout positive operating witness."
+    },
+    {
+      "repository": "James3014/nexus-core",
+      "sidecar_integrated": true,
+      "evidence_state": "CANARY_ONLY",
+      "latest_case_id": null,
+      "note": "Initial fleet canary/integration evidence exists; no additional post-rollout case is asserted here."
+    },
+    {
+      "repository": "James3014/nexus-learning",
+      "sidecar_integrated": true,
+      "evidence_state": "CANARY_ONLY",
+      "latest_case_id": null,
+      "note": "Initial fleet canary/integration evidence exists; no additional post-rollout case is asserted here."
+    },
+    {
+      "repository": "James3014/nexus-open-swe-runtime",
+      "sidecar_integrated": true,
+      "evidence_state": "CANARY_ONLY",
+      "latest_case_id": null,
+      "note": "Initial fleet canary/integration evidence exists; no additional post-rollout case is asserted here."
+    },
+    {
+      "repository": "James3014/repository-intelligence-engine",
+      "sidecar_integrated": true,
+      "evidence_state": "POST_ROLLOUT_WITNESS",
+      "latest_case_id": "RIE-17-POST-ROLLOUT",
+      "note": "Self-dogfooding post-rollout witness is recorded; PR #17 also has a separate source-forensics failure-family case."
+    },
+    {
+      "repository": "James3014/nexus-runtime",
+      "sidecar_integrated": true,
+      "evidence_state": "CANARY_ONLY",
+      "latest_case_id": null,
+      "note": "Initial fleet canary/integration evidence exists; no additional post-rollout case is asserted here."
+    },
+    {
+      "repository": "James3014/nexus-opencli-reviewer",
+      "sidecar_integrated": true,
+      "evidence_state": "CANARY_ONLY",
+      "latest_case_id": null,
+      "note": "Canonical sidecar coexists with the legacy reviewer path; no additional post-rollout case is asserted here."
+    }
+  ]
+}
