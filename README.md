@@ -799,7 +799,7 @@ At `v0.1.1`, the release candidate passes **180 tests** covering:
 - adapter-consumer compatibility;
 - claim ceilings and authority exclusions.
 
-A real cross-repository GitHub Actions canary was completed against `James3014/Nexus-new` for the initial `v0.1.0` consumer release. The `v0.1.1` release requires its own revision-bound canary before that newer release is claimed as cross-repository verified.
+A fresh cross-repository GitHub Actions canary for immutable `v0.1.1` completed successfully against `James3014/Nexus-new` PR #967. The canary report was exact-identity-bound to the Nexus-new PR head/base/main revision and completed with `evidence_completeness=COMPLETE` under the `ADVISORY_EVIDENCE_ONLY` ceiling.
 
 ---
 
@@ -862,7 +862,7 @@ A higher-level controller may use Repository Intelligence as evidence, but autho
 - canonical engine / CLI / GitHub Action are hosted in this repository;
 - seven native Repository Intelligence operations are available;
 - Dev MCP can project all seven operations for GPT/Codex workflows;
-- the historical `v0.1.0` GitHub Actions cross-repository canary succeeded against `Nexus-new`; `v0.1.1` remains subject to a fresh release-bound canary;
+- a fresh `v0.1.1` GitHub Actions cross-repository canary succeeded against `Nexus-new` PR #967 with complete exact-identity-bound evidence;
 - legacy reviewer code now consumes / forwards to the independent engine rather than owning duplicate intelligence implementations.
 
 This supports the claim that Repository Intelligence is reusable across repositories as an advisory intelligence layer. It does **not** imply standalone merge, release, deployment, or production authority.
@@ -874,7 +874,7 @@ This supports the claim that Repository Intelligence is reusable across reposito
 - Accepted V1.1 behavior baseline: `aab512ff738650cbffcbc44532b9d99f3787d138`
 - Initial extracted engine source: `693ae7cf59e3b090ee873b7196ee330b30e26221`
 - Initial consumer-productized release: `v0.1.0` at `a8b9a00a6f3ea3e9ade0c6ef494d0fa88a2d73b2`
-- Current release target: `v0.1.1` (bind to the published release commit after release verification)
+- Current immutable release: `v0.1.1` at `cb081c20549ce5105e557794d01055bff6728f6c` (tree `c2cf20b7034b5a715195cc00116a5be62a64c40b`)
 - Historical extraction / compatibility source: `James3014/nexus-opencli-reviewer`
 
 Repository Intelligence should remain one canonical advisory engine with multiple adapters, not multiple copies of the same decision logic.

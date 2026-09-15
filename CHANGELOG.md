@@ -21,7 +21,7 @@ The project follows semantic versioning while it remains in the `0.x` series. Im
 
 - Full test suite: 180 passed on the `v0.1.1` release candidate.
 - Wheel build: `repository_intelligence_engine-0.1.1-py3-none-any.whl` built successfully.
-- A fresh cross-repository GitHub Actions canary is required before claiming `v0.1.1` cross-repository verification.
+- Fresh cross-repository GitHub Actions canary completed successfully against `James3014/Nexus-new` PR #967 using `repository-intelligence-engine@v0.1.1`; the report was exact-identity-bound with `evidence_completeness=COMPLETE` and `ADVISORY_EVIDENCE_ONLY`.
 
 ## [0.1.0]
 
