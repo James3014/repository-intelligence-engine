@@ -4,6 +4,29 @@ All notable changes to Repository Intelligence Engine are documented here.
 
 The project follows semantic versioning while it remains in the `0.x` series. Immutable release tags are never moved after publication.
 
+## [0.1.2] - 2026-09-16
+
+### Added
+
+- Published `terminal/` as an optional second-stage GitHub Action that waits for one exact PR head's observed external Check Run / Commit Status set to become terminal and stable for a bounded quiescence window.
+- Terminal evidence records its observation semantics and remains hash-bound under `ADVISORY_EVIDENCE_ONLY`.
+
+### Changed
+
+- Public installation and GitHub Action examples now pin the immutable `v0.1.2` release.
+- Documentation now distinguishes PR-event snapshot evidence from terminal observed-check evidence.
+
+### Safety boundary
+
+- Terminal observation does not infer repository required-check topology, Candidate acceptance, all-green CI, or merge readiness.
+- The release adds no repository write, worker-dispatch, approval, merge, deployment, or production authority.
+
+### Verification
+
+- Full test suite: 212 passed on the `v0.1.2` release candidate.
+- Wheel build: `repository_intelligence_engine-0.1.2-py3-none-any.whl` built successfully with Python 3.12.
+- Hosted PR #25 checks: package test, PR-event snapshot, and terminal observation all passed on the exact Candidate head.
+
 ## [0.1.1] - 2026-09-15
 
 ### Fixed

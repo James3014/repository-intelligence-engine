@@ -1,6 +1,6 @@
 [project]
 name = "repository-intelligence-engine"
-version = "0.1.1"
+version = "0.1.2"
 description = "Deterministic, transport-neutral repository intelligence engine and read-only GitHub adapter"
 readme = "README.md"
 license = { text = "Apache-2.0" }
