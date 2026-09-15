@@ -107,6 +107,58 @@ def _paginate_list(api: GitHubReadAPI, path: str, *, key: str | None = None) -> 
     raise RuntimeError(f"GitHub pagination exceeded {DEFAULT_MAX_PAGES} pages for {path}")
 
 
+def _status_url_matches_subject(
+    value: Any,
+    expected_path: str,
+    *,
+    expected_host: str,
+    expected_repository: str,
+) -> bool:
+    """Validate a status resource URL without using an arbitrary URL as identity."""
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        if parsed.username is not None or parsed.password is not None:
+            return False
+    except ValueError:
+        return False
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != expected_host
+        or parsed.query
+        or parsed.fragment
+    ):
+        return False
+
+    try:
+        owner, repo = expected_repository.split("/", 1)
+    except ValueError:
+        return False
+    marker = f"/repos/{owner}/{repo}/statuses/"
+    expected_base, separator, expected_head = expected_path.rpartition(marker)
+    if not separator or not expected_head or "/" in expected_head:
+        return False
+
+    # Keep the configured API base path and all non-repository route segments
+    # byte-for-byte exact. Only GitHub's canonical owner/name casing may differ.
+    if not parsed.path.startswith(expected_base):
+        return False
+    actual_suffix = parsed.path[len(expected_base) :]
+    if not actual_suffix.startswith("/repos/"):
+        return False
+    actual_parts = actual_suffix[len("/repos/") :].split("/")
+    if len(actual_parts) != 4:
+        return False
+    actual_owner, actual_repo, route, actual_head = actual_parts
+    return (
+        actual_owner.casefold() == owner.casefold()
+        and actual_repo.casefold() == repo.casefold()
+        and route == "statuses"
+        and actual_head == expected_head
+    )
+
+
 def collect_pr_snapshot(api: GitHubReadAPI, repository: str, pr_number: int) -> dict[str, Any]:
     """Collect one normalized PR snapshot without reading or executing PR file content."""
     repository = _validate_repo(repository)
@@ -198,6 +250,13 @@ def collect_pr_snapshot(api: GitHubReadAPI, repository: str, pr_number: int) -> 
     # The list endpoint is reverse chronological.  Only the first status for
     # each context is current; older entries must never contribute alongside it.
     seen_contexts: set[str] = set()
+    api_url = str(getattr(api, "api_url", DEFAULT_API_URL)).rstrip("/")
+    api_url_parts = urllib.parse.urlsplit(api_url)
+    expected_api_host = api_url_parts.netloc
+    status_subject_path = (
+        f"{api_url_parts.path.rstrip('/')}{prefix}/statuses/"
+        f"{urllib.parse.quote(head_sha, safe='')}"
+    )
     for row in status_rows:
         context = row.get("context")
         if not isinstance(context, str) or not context:
@@ -211,18 +270,37 @@ def collect_pr_snapshot(api: GitHubReadAPI, repository: str, pr_number: int) -> 
         # be replaced by a historical entry for the same context.
         seen_contexts.add(context_key)
         state = row.get("state")
-        row_head_sha = row.get("sha")
         if not isinstance(state, str) or state.lower() not in {"error", "failure", "pending", "success"}:
             collection_errors.append(f"commit_statuses: invalid state for context '{context}'")
             continue
-        if not isinstance(row_head_sha, str) or row_head_sha != head_sha:
+
+        # The REST list response is already scoped to status_path and normally
+        # omits ``sha``. Preserve the explicit guard when a provider includes
+        # it, and independently validate a documented status URL when present;
+        # neither an absent field nor an arbitrary URL may change the subject.
+        if "sha" in row:
+            row_head_sha = row.get("sha")
+            if not isinstance(row_head_sha, str) or row_head_sha != head_sha:
+                collection_errors.append(
+                    f"commit_statuses: sha missing or mismatches PR head_sha for context '{context}'"
+                )
+                continue
+        else:
+            row_head_sha = head_sha
+
+        status_url = row.get("url")
+        if "url" in row and not _status_url_matches_subject(
+            status_url,
+            status_subject_path,
+            expected_host=expected_api_host,
+            expected_repository=repository,
+        ):
             collection_errors.append(
-                f"commit_statuses: sha missing or mismatches PR head_sha for context '{context}'"
+                f"commit_statuses: url missing or mismatches PR head_sha for context '{context}'"
             )
             continue
 
         status_id = row.get("id")
-        status_url = row.get("url")
         target_url = row.get("target_url")
         updated_at = row.get("updated_at")
         created_at = row.get("created_at")
