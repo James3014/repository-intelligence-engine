@@ -13,7 +13,9 @@ It answers questions such as:
 
 The engine is deliberately **advisory-only**. It can describe repository state and produce hash-bound evidence, but it cannot approve, merge, release, publish, dispatch workers, or execute pull-request source.
 
-Current release: **`v0.1.0`**
+Current release: **`v0.1.1`**
+
+License: **Apache-2.0**
 
 Canonical Python package: **`repository_intelligence`**
 
@@ -307,7 +309,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - id: ri
-        uses: James3014/repository-intelligence-engine@v0.1.0
+        uses: James3014/repository-intelligence-engine@v0.1.1
 
       - uses: actions/upload-artifact@v4
         with:
@@ -371,7 +373,7 @@ Install directly from the immutable release tag:
 
 ```bash
 python3 -m pip install \
-  "git+https://github.com/James3014/repository-intelligence-engine.git@v0.1.0"
+  "git+https://github.com/James3014/repository-intelligence-engine.git@v0.1.1"
 ```
 
 Then:
@@ -768,7 +770,7 @@ You do **not** copy the engine into each repository. All consumers should depend
 For CI and automation, prefer immutable version pinning:
 
 ```yaml
-uses: James3014/repository-intelligence-engine@v0.1.0
+uses: James3014/repository-intelligence-engine@v0.1.1
 ```
 
 For environments that require a commit-level pin, use the release commit associated with the tag.
@@ -787,7 +789,7 @@ cd repository-intelligence-engine
 python3 -m pytest -q
 ```
 
-At `v0.1.0`, the consumer productization suite contains **40 passing tests**, covering:
+At `v0.1.1`, the release candidate passes **180 tests** covering:
 
 - package importability and decoupling;
 - all seven public operations;
@@ -797,7 +799,17 @@ At `v0.1.0`, the consumer productization suite contains **40 passing tests**, co
 - adapter-consumer compatibility;
 - claim ceilings and authority exclusions.
 
-A real cross-repository GitHub Actions canary was also completed against `James3014/Nexus-new` using `repository-intelligence-engine@v0.1.0`.
+A real cross-repository GitHub Actions canary was completed against `James3014/Nexus-new` for the initial `v0.1.0` consumer release. The `v0.1.1` release requires its own revision-bound canary before that newer release is claimed as cross-repository verified.
+
+---
+
+## Contributing and security
+
+Contributions are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development and pull-request expectations.
+
+For vulnerability reporting and the supported security boundary, see [`SECURITY.md`](SECURITY.md). Do not publish exploit details or credentials in public Issues.
+
+The project is licensed under the [Apache License 2.0](LICENSE).
 
 ---
 
@@ -845,12 +857,12 @@ A higher-level controller may use Repository Intelligence as evidence, but autho
 
 ## Current status
 
-`v0.1.0` has been validated as an independent consumer product:
+`v0.1.1` packages the current independent consumer product, including Commit Status acquisition alongside Check Runs:
 
 - canonical engine / CLI / GitHub Action are hosted in this repository;
 - seven native Repository Intelligence operations are available;
 - Dev MCP can project all seven operations for GPT/Codex workflows;
-- a real GitHub Actions cross-repository canary succeeded against `Nexus-new`;
+- the historical `v0.1.0` GitHub Actions cross-repository canary succeeded against `Nexus-new`; `v0.1.1` remains subject to a fresh release-bound canary;
 - legacy reviewer code now consumes / forwards to the independent engine rather than owning duplicate intelligence implementations.
 
 This supports the claim that Repository Intelligence is reusable across repositories as an advisory intelligence layer. It does **not** imply standalone merge, release, deployment, or production authority.
@@ -861,8 +873,8 @@ This supports the claim that Repository Intelligence is reusable across reposito
 
 - Accepted V1.1 behavior baseline: `aab512ff738650cbffcbc44532b9d99f3787d138`
 - Initial extracted engine source: `693ae7cf59e3b090ee873b7196ee330b30e26221`
-- Consumer-productized release: `v0.1.0`
-- Canonical release commit: `a8b9a00a6f3ea3e9ade0c6ef494d0fa88a2d73b2`
+- Initial consumer-productized release: `v0.1.0` at `a8b9a00a6f3ea3e9ade0c6ef494d0fa88a2d73b2`
+- Current release target: `v0.1.1` (bind to the published release commit after release verification)
 - Historical extraction / compatibility source: `James3014/nexus-opencli-reviewer`
 
 Repository Intelligence should remain one canonical advisory engine with multiple adapters, not multiple copies of the same decision logic.

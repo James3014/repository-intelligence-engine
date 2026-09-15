@@ -1,9 +1,22 @@
 [project]
 name = "repository-intelligence-engine"
-version = "0.1.0"
+version = "0.1.1"
 description = "Deterministic, transport-neutral repository intelligence engine and read-only GitHub adapter"
+readme = "README.md"
+license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = []
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+[project.urls]
+Repository = "https://github.com/James3014/repository-intelligence-engine"
+Issues = "https://github.com/James3014/repository-intelligence-engine/issues"
 
 [project.scripts]
 repository-intelligence = "repository_intelligence.cli:main"
