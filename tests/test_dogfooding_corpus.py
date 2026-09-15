@@ -118,3 +118,68 @@ def test_extract_rejects_authority_escalated_report():
     report["claim_ceiling"] = "MERGE_READY"
     with pytest.raises(ValueError, match="claim ceiling"):
         validator.extract_report_candidates(report)
+
+
+def test_terminal_observation_fails_closed_on_authority_escalation():
+    data = _corpus()
+    case = next(item for item in data["cases"] if item.get("terminal_observation"))
+    case["terminal_observation"]["claim_ceiling"] = "MERGE_READY"
+    assert any("terminal_observation.claim_ceiling" in error for error in validator.validate_corpus(data))
+
+
+def test_terminal_observation_must_bind_exact_case_head():
+    data = _corpus()
+    case = next(item for item in data["cases"] if item.get("terminal_observation"))
+    case["terminal_observation"]["expected_head_sha"] = "f" * 40
+    assert any("expected_head_sha must match case head_sha" in error for error in validator.validate_corpus(data))
+
+
+def test_terminal_observation_requires_valid_artifact_digest():
+    data = _corpus()
+    case = next(item for item in data["cases"] if item.get("terminal_observation"))
+    case["terminal_observation"]["artifact_digest"] = "sha256:not-a-digest"
+    assert any("artifact_digest is invalid" in error for error in validator.validate_corpus(data))
+
+
+def test_fleet_terminal_case_must_reference_terminal_witness():
+    data = _corpus()
+    row = next(item for item in data["fleet"] if item["repository"] == "James3014/nexus-opencli-reviewer")
+    row["latest_terminal_case_id"] = "DEVSPACE-171-POST-ROLLOUT"
+    assert any("must reference a terminal-observation case" in error for error in validator.validate_corpus(data))
+
+
+def test_extract_terminal_report_preserves_terminal_surface():
+    inner = _report(cfi_status="UNEXPECTED_FAILURE_OBSERVED")
+    terminal = {
+        "schema": "reviewer.repository_intelligence_terminal_cloud.v1",
+        "claim_ceiling": "ADVISORY_EVIDENCE_ONLY",
+        "snapshot_semantics": validator.TERMINAL_SEMANTICS,
+        "review_identity": copy.deepcopy(inner["review_identity"]),
+        "cloud_bundle": inner,
+    }
+    candidates = validator.extract_report_candidates(terminal)
+    assert candidates == [
+        {
+            "repository": "owner/repo",
+            "pr_number": 7,
+            "head_sha": "a" * 40,
+            "base_sha": "b" * 40,
+            "current_main_sha": "b" * 40,
+            "observation_surface": "TERMINAL_OBSERVED_CHECK_SET",
+            "failure_family": "UNEXPECTED_TERMINAL_CI_FAILURE",
+            "evidence_class": "LIVE_FLEET_DOGFOOD",
+        }
+    ]
+
+
+def test_extract_terminal_report_rejects_identity_substitution():
+    inner = _report()
+    terminal = {
+        "schema": "reviewer.repository_intelligence_terminal_cloud.v1",
+        "claim_ceiling": "ADVISORY_EVIDENCE_ONLY",
+        "snapshot_semantics": validator.TERMINAL_SEMANTICS,
+        "review_identity": ["owner/repo", 7, "f" * 40, "b" * 40, "b" * 40],
+        "cloud_bundle": inner,
+    }
+    with pytest.raises(ValueError, match="identity does not match"):
+        validator.extract_report_candidates(terminal)
