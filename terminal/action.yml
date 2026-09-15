@@ -1,0 +1,88 @@
+name: Repository Intelligence terminal observation
+
+description: >-
+  Read-only advisory terminal observation for one exact pull-request head. Waits
+  until the currently observed external GitHub status-check set is terminal and
+  stable for a bounded quiescence window. Does not infer required-check topology
+  or grant Candidate acceptance / merge authority.
+
+inputs:
+  pr-number:
+    description: Pull request number. Defaults to the current pull_request event.
+    required: false
+    default: ""
+  expected-head-sha:
+    description: Exact 40-hex pull-request head SHA that must remain unchanged while observing.
+    required: true
+  report-path:
+    description: Terminal JSON report path relative to the caller workspace.
+    required: false
+    default: repository-intelligence-terminal.json
+  timeout-seconds:
+    description: Maximum bounded observation time.
+    required: false
+    default: "900"
+  poll-seconds:
+    description: Poll interval for read-only GitHub evidence acquisition.
+    required: false
+    default: "5"
+  quiescence-seconds:
+    description: Required stable terminal observed-set window before emitting evidence.
+    required: false
+    default: "20"
+
+outputs:
+  report-path:
+    description: Path to the generated terminal evidence bundle.
+    value: ${{ steps.run.outputs.report-path }}
+  content-sha256:
+    description: SHA-256 of the generated terminal evidence bundle.
+    value: ${{ steps.run.outputs.content-sha256 }}
+  readiness:
+    description: Deterministic PR readiness disposition from the final observed snapshot.
+    value: ${{ steps.run.outputs.readiness }}
+  cfi-status:
+    description: CI Failure Intelligence status from the final observed snapshot.
+    value: ${{ steps.run.outputs.cfi-status }}
+  eia-decision:
+    description: External Intelligence Automation advisory decision from the final observed snapshot.
+    value: ${{ steps.run.outputs.eia-decision }}
+  claim-ceiling:
+    description: Top-level evidence claim ceiling.
+    value: ${{ steps.run.outputs.claim-ceiling }}
+  snapshot-semantics:
+    description: Terminal observation semantics. Never a required-check or merge-ready verdict.
+    value: ${{ steps.run.outputs.snapshot-semantics }}
+  observed-external-check-count:
+    description: Number of external checks/statuses in the stable terminal observed set.
+    value: ${{ steps.run.outputs.observed-external-check-count }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        RI_PR_NUMBER: ${{ inputs.pr-number }}
+        RI_EXPECTED_HEAD_SHA: ${{ inputs.expected-head-sha }}
+        RI_REPORT_PATH: ${{ inputs.report-path }}
+        RI_TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
+        RI_POLL_SECONDS: ${{ inputs.poll-seconds }}
+        RI_QUIESCENCE_SECONDS: ${{ inputs.quiescence-seconds }}
+      run: |
+        set -euo pipefail
+        args=(
+          --repository "$GITHUB_REPOSITORY"
+          --expected-head-sha "$RI_EXPECTED_HEAD_SHA"
+          --current-actions-run-id "$GITHUB_RUN_ID"
+          --timeout-seconds "$RI_TIMEOUT_SECONDS"
+          --poll-seconds "$RI_POLL_SECONDS"
+          --quiescence-seconds "$RI_QUIESCENCE_SECONDS"
+          --output "$RI_REPORT_PATH"
+        )
+        if [[ -n "$RI_PR_NUMBER" ]]; then
+          args+=(--pr-number "$RI_PR_NUMBER")
+        fi
+        PYTHONPATH="$GITHUB_ACTION_PATH/..${PYTHONPATH:+:$PYTHONPATH}" \
+          python3 "$GITHUB_ACTION_PATH/../adapters/github_terminal.py" "${args[@]}"
