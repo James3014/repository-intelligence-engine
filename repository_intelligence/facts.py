@@ -56,8 +56,9 @@ KNOWN_FACT_LIMITATIONS: dict[str, str] = {
         "auth check requires semantic or control-flow analysis that is not implemented here."
     ),
     RepositoryFactKind.RELATED_TEST_CHANGED.value: (
-        "Diff-path heuristic over changed_files; test files are matched by "
-        "naming convention (test/ directory, test_* / *_test / *.test.* / *.spec.*)."
+        "Diff-path naming heuristic over changed_files; a test change is related only "
+        "when its normalized test subject matches a changed non-test file stem. "
+        "This does not prove runtime or behavioral test coverage."
     ),
     RepositoryFactKind.SILENT_RETRY_PATTERN.value: (
         "AST-based; detects a try/except whose handler body only passes or "
@@ -140,13 +141,57 @@ def _is_test_path(path: str) -> bool:
     filename = parts[-1]
     lower = filename.lower()
     stem = lower.rsplit(".", 1)[0] if "." in lower else lower
-    if lower.startswith("test_") or lower.endswith("_test"):
+    if stem.startswith("test_") or stem.endswith("_test"):
         return True
     if stem.startswith("test") and stem.endswith("test"):
         return True
     if ".test." in lower or ".spec." in lower:
         return True
     return False
+
+
+def _normalized_test_subject(path: str) -> str | None:
+    """Return the conservative filename subject used for related-test matching."""
+    filename = path.split("/")[-1].lower()
+    if ".test." in filename:
+        subject = filename.split(".test.", 1)[0]
+    elif ".spec." in filename:
+        subject = filename.split(".spec.", 1)[0]
+    else:
+        stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+        if stem.startswith("test_"):
+            subject = stem[5:]
+        elif stem.endswith("_test"):
+            subject = stem[:-5]
+        else:
+            return None
+    return subject or None
+
+
+def _source_subject(path: str) -> str | None:
+    if _is_test_path(path):
+        return None
+    filename = path.split("/")[-1].lower()
+    stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+    return stem or None
+
+
+def _related_test_paths(changed_files: tuple[str, ...]) -> tuple[str, ...]:
+    source_subjects = {
+        subject
+        for path in changed_files
+        if (subject := _source_subject(path)) is not None
+    }
+    if not source_subjects:
+        return ()
+    related = []
+    for path in changed_files:
+        if not _is_test_path(path):
+            continue
+        subject = _normalized_test_subject(path)
+        if subject is not None and subject in source_subjects:
+            related.append(path)
+    return tuple(related)
 
 
 def _validate_observation(
@@ -312,7 +357,7 @@ def _classify_facts(
                     )
                 )
                 continue
-            test_paths = tuple(path for path in changed_files if _is_test_path(path))
+            test_paths = _related_test_paths(changed_files)
             if test_paths:
                 facts.append(
                     RepositoryFactV1(
@@ -325,7 +370,7 @@ def _classify_facts(
                                 file_path=path,
                                 line=0,
                                 column=0,
-                                evidence_ref="changed_test_file",
+                                evidence_ref="related_test_changed_by_name",
                             )
                             for path in test_paths
                         ),
@@ -465,8 +510,11 @@ def analyze_structured_facts(data: Mapping[str, Any]) -> StructuredFactsReportV1
         language = language.strip()
 
     detector_version = data.get("detector_version")
-    if not isinstance(detector_version, str):
+    if not isinstance(detector_version, str) or not detector_version.strip():
+        collection_problems.append("detector_version missing or invalid")
         detector_version = ""
+    else:
+        detector_version = detector_version.strip()
 
     requested_kinds: list[RepositoryFactKind] = []
     requested_raw = data.get("requested_facts")
@@ -554,6 +602,16 @@ def analyze_structured_facts(data: Mapping[str, Any]) -> StructuredFactsReportV1
             continue
         observations_raw.append(dict(item))
 
+    observations_raw.sort(
+        key=lambda item: (
+            str(item.get("fact_kind", "")),
+            str(item.get("file_path", "")),
+            item.get("line") if isinstance(item.get("line"), int) else -1,
+            item.get("column") if isinstance(item.get("column"), int) else -1,
+            str(item.get("evidence_ref", "")),
+        )
+    )
+
     snapshot_changed_raw = snapshot.get("changed_files") if isinstance(snapshot, Mapping) else None
     snapshot_changed = _normalize_path_sequence(
         snapshot_changed_raw,
@@ -630,26 +688,25 @@ def analyze_structured_facts(data: Mapping[str, Any]) -> StructuredFactsReportV1
 
 
 def _identity_from_payload(payload: Mapping[str, Any]) -> RevisionIdentity:
+    """Recompute identity from primitive fields and reject derived-field tampering."""
     identity = payload.get("identity")
     if not isinstance(identity, Mapping):
         raise ValueError("report identity missing or invalid")
-    return RevisionIdentity(
-        repository=str(identity.get("repository", "")),
-        pr_number=identity.get("pr_number") if isinstance(identity.get("pr_number"), int) else 0,
-        head_sha=str(identity.get("head_sha", "")),
-        base_sha=str(identity.get("base_sha", "")),
-        current_main_sha=str(identity.get("current_main_sha", "")),
-        declared_base_sha=identity.get("declared_base_sha"),
-        declared_head_sha=identity.get("declared_head_sha"),
-        declared_main_sha=identity.get("declared_main_sha"),
-        stale_base=identity.get("stale_base") is True,
-        stale_declared_base=identity.get("stale_declared_base") is True,
-        stale_declared_head=identity.get("stale_declared_head") is True,
-        stale_declared_main=identity.get("stale_declared_main") is True,
-        stale_evidence=identity.get("stale_evidence") is True,
-        evidence_gaps=tuple(gap for gap in identity.get("evidence_gaps", []) if isinstance(gap, str)),
-        is_valid=identity.get("is_valid") is True,
-    )
+
+    primitive = {
+        "repository": identity.get("repository"),
+        "pr_number": identity.get("pr_number"),
+        "head_sha": identity.get("head_sha"),
+        "base_sha": identity.get("base_sha"),
+        "current_main_sha": identity.get("current_main_sha"),
+        "declared_base_sha": identity.get("declared_base_sha"),
+        "declared_head_sha": identity.get("declared_head_sha"),
+        "declared_main_sha": identity.get("declared_main_sha"),
+    }
+    recomputed = revision_identity(primitive)
+    if dict(identity) != recomputed.to_dict():
+        raise ValueError("report identity derived fields do not match recomputed identity")
+    return recomputed
 
 
 def verify_structured_facts_report(payload: Mapping[str, Any]) -> bool:
@@ -696,7 +753,7 @@ def verify_structured_facts_report(payload: Mapping[str, Any]) -> bool:
     if not isinstance(language, str):
         return False
     detector_version = payload.get("detector_version")
-    if not isinstance(detector_version, str):
+    if not isinstance(detector_version, str) or not detector_version.strip():
         return False
 
     covered_files = payload.get("covered_files")

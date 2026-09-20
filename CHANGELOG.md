@@ -17,6 +17,7 @@ The project follows semantic versioning while it remains in the `0.x` series. Im
 ### Changed
 
 - CLI now exposes eight operations (`facts` added); public verification surface adds `verify_structured_facts_report`.
+- The `facts` operation is not yet claimed live through Dev MCP; that projection requires a separate DevSpace cutover.
 - README documents the `facts` capability, its fail-closed behavior, and the `REPOSITORY_FACTS_ONLY` claim ceiling.
 
 ### Safety boundary

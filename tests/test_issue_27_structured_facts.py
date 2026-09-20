@@ -375,7 +375,7 @@ def test_engine_related_test_changed_from_snapshot_diff() -> None:
     assert rt.status is RepositoryFactStatus.PROVEN
     assert rt.evidence[0].file_path == "tests/test_run.py"
     assert rt.evidence[0].line == 0
-    assert rt.evidence[0].evidence_ref == "changed_test_file"
+    assert rt.evidence[0].evidence_ref == "related_test_changed_by_name"
 
 
 def test_engine_related_test_changed_no_test_diff_no_changed_files() -> None:
@@ -514,3 +514,64 @@ def test_content_hash_is_deterministic_and_sorted() -> None:
     second = analyze_structured_facts(_report_data(bundle)).content_sha256
     assert first == second
     assert len(first) == 64
+
+def test_engine_observation_order_is_canonicalized() -> None:
+    bundle = _bundle(
+        {
+            "src/run.py": (
+                "import subprocess\n"
+                "subprocess.run(['a'])\n"
+                "subprocess.run(['b'])\n"
+            )
+        }
+    )
+    first = analyze_structured_facts(_report_data(bundle))
+    reversed_bundle = copy.deepcopy(bundle)
+    reversed_bundle["observations"] = list(reversed(reversed_bundle["observations"]))
+    second = analyze_structured_facts(_report_data(reversed_bundle))
+    assert second.content_sha256 == first.content_sha256
+    assert second.observations == first.observations
+
+
+def test_engine_missing_detector_version_fails_closed() -> None:
+    bundle = _bundle({"src/run.py": "import subprocess\nsubprocess.run(['x'])\n"})
+    data = _report_data(bundle)
+    data["detector_version"] = ""
+    report = analyze_structured_facts(data)
+    assert report.is_complete is False
+    assert "detector_version missing or invalid" in report.collection_errors
+
+
+def test_verifier_rejects_rehashed_identity_derived_field_tampering() -> None:
+    bundle = _bundle({"src/run.py": "import subprocess\nsubprocess.run(['x'])\n"})
+    report = analyze_structured_facts(_report_data(bundle))
+    tampered = copy.deepcopy(report.to_dict())
+    # Change a primitive identity field while leaving stale/valid derived fields false/true.
+    # A verifier that trusts serialized derived flags would incorrectly accept this.
+    tampered["identity"]["declared_head_sha"] = "c" * 40
+    tampered = _rehash(tampered)
+    assert verify_structured_facts_report(tampered) is False
+
+
+def test_related_test_changed_recognizes_suffix_test_py() -> None:
+    bundle = _bundle({"src/run.py": "x = 1\n"})
+    snapshot = dict(VALID_SNAPSHOT)
+    snapshot["changed_files"] = ["src/run.py", "tests/run_test.py"]
+    report = analyze_structured_facts(_report_data(bundle, snapshot=snapshot))
+    fact = next(
+        f for f in report.facts if f.fact_kind is RepositoryFactKind.RELATED_TEST_CHANGED
+    )
+    assert fact.status is RepositoryFactStatus.PROVEN
+    assert fact.evidence[0].file_path == "tests/run_test.py"
+
+
+def test_related_test_changed_does_not_treat_unrelated_test_as_related() -> None:
+    bundle = _bundle({"src/run.py": "x = 1\n"})
+    snapshot = dict(VALID_SNAPSHOT)
+    snapshot["changed_files"] = ["src/run.py", "tests/test_other.py"]
+    report = analyze_structured_facts(_report_data(bundle, snapshot=snapshot))
+    fact = next(
+        f for f in report.facts if f.fact_kind is RepositoryFactKind.RELATED_TEST_CHANGED
+    )
+    assert fact.status is RepositoryFactStatus.NOT_OBSERVED
+    assert fact.evidence == ()

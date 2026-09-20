@@ -548,7 +548,9 @@ verify_structured_facts_report
 
 ### D. Dev MCP — best for GPT / Codex interactive workflows
 
-DevSpace can expose the engine as eight read-only MCP tools:
+DevSpace currently projects the seven released read-only MCP tools below. The new
+`facts` operation is implemented in this repository but requires a separate
+DevSpace projection/cutover before it can be claimed live through MCP:
 
 ```text
 repository_intelligence_revision
@@ -558,7 +560,7 @@ repository_intelligence_ci
 repository_intelligence_impact
 repository_intelligence_cfi
 repository_intelligence_eia
-repository_intelligence_facts
+# repository_intelligence_facts  # planned projection; not live in the current MCP catalog
 ```
 
 The Dev MCP projection is a consumer of this repository. Each result can report the exact engine HEAD used for the call.
@@ -572,7 +574,7 @@ GPT / Codex
     v
 Dev MCP
     |
-    | one of eight RI native calls
+    | one of seven currently projected RI native calls
     v
 repository-intelligence-engine
     |
@@ -874,10 +876,10 @@ cd repository-intelligence-engine
 python3 -m pytest -q
 ```
 
-At `v0.1.1`, the release candidate passes **180 tests** covering:
+At immutable `v0.1.1`, the release candidate passed **180 tests** covering:
 
 - package importability and decoupling;
-- all eight public operations;
+- all seven public operations available in that release;
 - CLI behavior;
 - GitHub Action acquisition and output;
 - tamper / identity-substitution rejection;
@@ -943,11 +945,13 @@ A higher-level controller may use Repository Intelligence as evidence, but autho
 
 ## Current status
 
-`v0.1.1` packages the current independent consumer product, including Commit Status acquisition alongside Check Runs:
+`v0.1.1` is the current immutable release and packages the seven-operation
+independent consumer product, including Commit Status acquisition alongside Check Runs.
+The current Unreleased branch adds the eighth local `facts` operation:
 
 - canonical engine / CLI / GitHub Action are hosted in this repository;
-- eight native Repository Intelligence operations are available;
-- Dev MCP can project all eight operations for GPT/Codex workflows;
+- seven native operations are in immutable `v0.1.1`; `facts` is Unreleased;
+- Dev MCP currently projects the seven released operations; `facts` needs a separate projection/cutover;
 - a fresh `v0.1.1` GitHub Actions cross-repository canary succeeded against `Nexus-new` PR #967 with complete exact-identity-bound evidence;
 - legacy reviewer code now consumes / forwards to the independent engine rather than owning duplicate intelligence implementations.
 
