@@ -9,6 +9,7 @@ from .models import Disposition
 from .contracts import (
     CLAIM_CEILING,
     CI_EVIDENCE_CLAIM_CEILING,
+    REPOSITORY_FACTS_CLAIM_CEILING,
     TERMINAL_FAILURE_STATUSES,
     SUPPORTED_TERMINAL_FAILURES,
     is_terminal_failure_status,
@@ -22,10 +23,16 @@ from .contracts import (
     EvidenceCompleteness,
     NormalizedCheckEvidence,
     ReadinessClassification,
+    RepositoryFactEvidenceV1,
+    RepositoryFactKind,
+    RepositoryFactStatus,
+    RepositoryFactV1,
     RepositoryIntelligencePolicyV1,
     RepositoryIntelligenceReportV1,
     RevisionIdentity,
+    StructuredFactsReportV1,
 )
+from .facts import analyze_structured_facts, verify_structured_facts_report
 from .impact import analyze_change_impact, verify_change_impact_report
 from .cfi import analyze_ci_failure_intelligence, verify_ci_failure_intelligence_report
 from .eia import plan_external_intelligence_automation, verify_external_intelligence_automation_envelope
@@ -42,6 +49,7 @@ from .core import (
 __all__ = [
     "CLAIM_CEILING",
     "CI_EVIDENCE_CLAIM_CEILING",
+    "REPOSITORY_FACTS_CLAIM_CEILING",
     "TERMINAL_FAILURE_STATUSES",
     "SUPPORTED_TERMINAL_FAILURES",
     "is_terminal_failure_status",
@@ -59,6 +67,11 @@ __all__ = [
     "ExternalIntelligenceDecision",
     "ExternalIntelligenceAutomationEnvelopeV1",
     "RepositoryIntelligenceReportV1",
+    "RepositoryFactKind",
+    "RepositoryFactStatus",
+    "RepositoryFactEvidenceV1",
+    "RepositoryFactV1",
+    "StructuredFactsReportV1",
     "revision_identity",
     "classify_readiness",
     "analyze_cross_pr_overlap",
@@ -70,6 +83,8 @@ __all__ = [
     "verify_ci_failure_intelligence_report",
     "plan_external_intelligence_automation",
     "verify_external_intelligence_automation_envelope",
+    "analyze_structured_facts",
+    "verify_structured_facts_report",
     "build_repository_intelligence_report",
     "verify_repository_intelligence_report",
 ]

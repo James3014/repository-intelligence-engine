@@ -10,6 +10,7 @@ It answers questions such as:
 - Which CI failures are terminal, expected, unexpected, complete, or safe to escalate for diagnosis?
 - If a changed file is part of a dependency graph, what is the direct and transitive blast radius?
 - Is there enough exact CI evidence for an external diagnosis workflow to be considered?
+- Did a revision introduce high-value semantic patterns such as empty/over-broad exception handlers, silent retry swallowing, subprocess spawning, or hardcoded localhost endpoints?
 
 The engine is deliberately **advisory-only**. It can describe repository state and produce hash-bound evidence, but it cannot approve, merge, release, publish, dispatch workers, or execute pull-request source.
 
@@ -62,7 +63,7 @@ This makes the same intelligence reusable from GitHub Actions, Dev MCP, a CLI, P
 The following are canonical in this repository:
 
 - the `repository_intelligence` Python package;
-- all seven V1/V1.1 intelligence operations;
+- all eight V1/V1.1 intelligence operations;
 - the CLI adapter;
 - the read-only GitHub Action;
 - the GitHub REST acquisition adapter;
@@ -86,6 +87,7 @@ DevSpace can project the same engine through MCP, but DevSpace is a **consumer a
 | `impact` | "What downstream files can this change affect?" | computes direct/transitive blast radius from caller-supplied dependency graph evidence | `PR_INTELLIGENCE_ONLY` |
 | `cfi` | "Is CI failure evidence complete and diagnosis-worthy?" | separates no failure, expected-only failure, unexpected failure, and insufficient evidence | `CI_EVIDENCE_ONLY` |
 | `eia` | "May an external diagnosis action be considered for this exact evidence?" | creates a hash-bound, idempotent advisory envelope for unattended/cloud consumers | `AUTOMATION_ADVISORY_ONLY` |
+| `facts` | "What structured semantic facts does this exact revision contain?" | emits revision-bound, deterministic AST facts (`EMPTY_EXCEPTION_HANDLER`, `BROAD_EXCEPTION_HANDLER`, `SUBPROCESS_CALL`, `NETWORK_ENDPOINT_ADDED`, `VISIBLE_AUTH_CHECK`, `RELATED_TEST_CHANGED`, `SILENT_RETRY_PATTERN`, `HARDCODED_LOCALHOST`) | `REPOSITORY_FACTS_ONLY` |
 
 ### Readiness dispositions
 
@@ -248,6 +250,54 @@ plus:
 - `content_sha256`.
 
 `READY` means only that a downstream controller may **consider** the described action using the exact evidence reference. It does not dispatch anything and grants no execution authority.
+
+### 8. Structured repository facts
+
+`facts` emits a `reviewer.structured_facts.v1` report of high-value semantic-pattern facts bound to an exact revision identity. Facts are stored in versioned, deterministic, machine-consumable records rather than prose.
+
+A caller supplies normalized evidence:
+
+```json
+{
+  "snapshot": {
+    "repository": "owner/repo",
+    "pr_number": 77,
+    "head_sha": "head777",
+    "base_sha": "main000",
+    "current_main_sha": "main000",
+    "changed_files": ["pkg/app.py", "tests/test_app.py"]
+  },
+  "language": "python",
+  "covered_files": ["pkg/app.py"],
+  "detector_version": "python-ast-v1",
+  "observations": [
+    {
+      "fact_kind": "EMPTY_EXCEPTION_HANDLER",
+      "file_path": "pkg/app.py",
+      "line": 13,
+      "column": 8,
+      "evidence_ref": "empty_except_handler"
+    }
+  ],
+  "detector_coverage": [
+    {"fact_kind": "EMPTY_EXCEPTION_HANDLER", "covered": true},
+    {"fact_kind": "NETWORK_ENDPOINT_ADDED", "covered": false}
+  ],
+  "collection_complete": true,
+  "collection_errors": []
+}
+```
+
+Each fact carries a `status` (`PROVEN`, `NOT_OBSERVED`, `UNKNOWN`, `UNRESOLVED`), reason codes, exact source evidence references, `head_sha`, language, and limitation notes. In the example above the engine would report `EMPTY_EXCEPTION_HANDLER` as `PROVEN`, `RELATED_TEST_CHANGED` as `PROVEN` (a test file is in `changed_files`), and `NETWORK_ENDPOINT_ADDED` as `UNKNOWN` because no deterministic detector is declared for it.
+
+Facts are **advisory and revision-bound**:
+
+- a stale, incomplete, or mismatched observation set fails closed to `UNRESOLVED` (`EVIDENCE_INCOMPLETE`) rather than reporting a false green;
+- the report carries a deduplicated, deterministic `content_sha256`;
+- `verify_structured_facts_report` recomputes derived facts from the embedded neutral inputs and rejects semantic tampering, not only a byte-hash mismatch;
+- a `PROVEN` semantic fact describes code shape only — it never grants approval, merge, release, or dispatch authority.
+
+Source parsing lives in adapters (for Python, `adapters/python_fact_detector.py` uses only the standard library `ast` module). The canonical engine stays language-neutral: it classifies and verifies observations regardless of which adapter produced them.
 
 ---
 
@@ -429,6 +479,7 @@ ci
 impact
 cfi
 eia
+facts
 ```
 
 Example:
@@ -492,11 +543,14 @@ verify_change_impact_report
 verify_ci_failure_intelligence_report
 verify_external_intelligence_automation_envelope
 verify_repository_intelligence_report
+verify_structured_facts_report
 ```
 
 ### D. Dev MCP — best for GPT / Codex interactive workflows
 
-DevSpace can expose the engine as seven read-only MCP tools:
+DevSpace currently projects the seven released read-only MCP tools below. The new
+`facts` operation is implemented in this repository but requires a separate
+DevSpace projection/cutover before it can be claimed live through MCP:
 
 ```text
 repository_intelligence_revision
@@ -506,6 +560,7 @@ repository_intelligence_ci
 repository_intelligence_impact
 repository_intelligence_cfi
 repository_intelligence_eia
+# repository_intelligence_facts  # planned projection; not live in the current MCP catalog
 ```
 
 The Dev MCP projection is a consumer of this repository. Each result can report the exact engine HEAD used for the call.
@@ -519,7 +574,7 @@ GPT / Codex
     v
 Dev MCP
     |
-    | one of seven RI native calls
+    | one of seven currently projected RI native calls
     v
 repository-intelligence-engine
     |
@@ -677,6 +732,7 @@ The GitHub Action cloud bundle also verifies cross-report identity consistency s
 - change-impact semantics over supplied graph evidence;
 - CFI triage;
 - EIA advisory envelopes;
+- structured-fact classification and verification over supplied observations;
 - hash-bound verification.
 
 ### Adapters own
@@ -820,10 +876,10 @@ cd repository-intelligence-engine
 python3 -m pytest -q
 ```
 
-At `v0.1.1`, the release candidate passes **180 tests** covering:
+At immutable `v0.1.1`, the release candidate passed **180 tests** covering:
 
 - package importability and decoupling;
-- all seven public operations;
+- all seven public operations available in that release;
 - CLI behavior;
 - GitHub Action acquisition and output;
 - tamper / identity-substitution rejection;
@@ -880,6 +936,7 @@ PR intelligence      -> PR_INTELLIGENCE_ONLY
 CI evidence          -> CI_EVIDENCE_ONLY
 external automation  -> AUTOMATION_ADVISORY_ONLY
 GitHub cloud bundle  -> ADVISORY_EVIDENCE_ONLY
+repository facts     -> REPOSITORY_FACTS_ONLY
 ```
 
 A higher-level controller may use Repository Intelligence as evidence, but authority must be granted and verified elsewhere.
@@ -888,11 +945,13 @@ A higher-level controller may use Repository Intelligence as evidence, but autho
 
 ## Current status
 
-`v0.1.1` packages the current independent consumer product, including Commit Status acquisition alongside Check Runs:
+`v0.1.1` is the current immutable release and packages the seven-operation
+independent consumer product, including Commit Status acquisition alongside Check Runs.
+The current Unreleased branch adds the eighth local `facts` operation:
 
 - canonical engine / CLI / GitHub Action are hosted in this repository;
-- seven native Repository Intelligence operations are available;
-- Dev MCP can project all seven operations for GPT/Codex workflows;
+- seven native operations are in immutable `v0.1.1`; `facts` is Unreleased;
+- Dev MCP currently projects the seven released operations; `facts` needs a separate projection/cutover;
 - a fresh `v0.1.1` GitHub Actions cross-repository canary succeeded against `Nexus-new` PR #967 with complete exact-identity-bound evidence;
 - legacy reviewer code now consumes / forwards to the independent engine rather than owning duplicate intelligence implementations.
 

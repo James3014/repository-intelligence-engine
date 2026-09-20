@@ -4,6 +4,31 @@ All notable changes to Repository Intelligence Engine are documented here.
 
 The project follows semantic versioning while it remains in the `0.x` series. Immutable release tags are never moved after publication.
 
+## [Unreleased]
+
+### Added
+
+- New `facts` operation emitting a `reviewer.structured_facts.v1` report of revision-bound, deterministic semantic-pattern facts with exact `content_sha256`.
+- `RepositoryFactKind`, `RepositoryFactStatus`, evidence, fact, and report contracts plus the `REPOSITORY_FACTS_ONLY` claim ceiling.
+- `analyze_structured_facts` classification engine and `verify_structured_facts_report` semantic verifier (recomputes derived facts from embedded neutral inputs and rejects tampering, not only byte-hash mismatch).
+- Python AST pattern collector `adapters/python_fact_detector.py` (stdlib `ast` only); classes `EMPTY_EXCEPTION_HANDLER`, `BROAD_EXCEPTION_HANDLER`, `SUBPROCESS_CALL`, and `SILENT_RETRY_PATTERN` are covered deterministically; `NETWORK_ENDPOINT_ADDED` and `VISIBLE_AUTH_CHECK` remain `UNKNOWN` pending detectors.
+- `RELATED_TEST_CHANGED` derived from `changed_files` and scoped to the exact revision identity.
+
+### Changed
+
+- CLI now exposes eight operations (`facts` added); public verification surface adds `verify_structured_facts_report`.
+- The `facts` operation is not yet claimed live through Dev MCP; that projection requires a separate DevSpace cutover.
+- README documents the `facts` capability, its fail-closed behavior, and the `REPOSITORY_FACTS_ONLY` claim ceiling.
+
+### Safety boundary
+
+- Structured facts describe code shape only and never grant approval, merge, release, worker dispatch, or production authority.
+- Stale or incomplete observation sets fail closed to `UNRESOLVED` rather than reporting a false green.
+
+### Verification
+
+- Full test suite: 248 passed.
+
 ## [0.1.2] - 2026-09-16
 
 ### Added
