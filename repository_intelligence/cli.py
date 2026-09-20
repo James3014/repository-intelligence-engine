@@ -2,7 +2,7 @@
 
 Deterministic, pure local JSON adapter for Repository Intelligence Core V1/V1.1 operations.
 No GitHub/network/state writes.
-Claim ceilings: PR_INTELLIGENCE_ONLY, CI_EVIDENCE_ONLY, AUTOMATION_ADVISORY_ONLY, REPOSITORY_FACTS_ONLY.
+Claim ceilings: PR_INTELLIGENCE_ONLY, CI_EVIDENCE_ONLY, AUTOMATION_ADVISORY_ONLY, REPOSITORY_FACTS_ONLY, REPOSITORY_QUERY_EVIDENCE_ONLY.
 """
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ from .eia import (
 )
 from .facts import analyze_structured_facts
 from .impact import analyze_change_impact
+from .retrieval import analyze_repository_query
 
 OPERATIONS: frozenset[str] = frozenset({
     "revision",
@@ -39,6 +40,7 @@ OPERATIONS: frozenset[str] = frozenset({
     "cfi",
     "eia",
     "facts",
+    "query",
 })
 
 
@@ -124,6 +126,15 @@ def execute_operation(operation: str, data: Any) -> dict[str, Any]:
         if not isinstance(data, dict):
             raise ValueError("Input for 'facts' must be a JSON object mapping")
         res = analyze_structured_facts(data)
+        return {
+            "operation": operation,
+            "claim_ceiling": res.claim_ceiling,
+            "result": res.to_dict(),
+        }
+    elif operation == "query":
+        if not isinstance(data, dict):
+            raise ValueError("Input for 'query' must be a JSON object mapping")
+        res = analyze_repository_query(data)
         return {
             "operation": operation,
             "claim_ceiling": res.claim_ceiling,

@@ -13,6 +13,7 @@ import repository_intelligence.facts as facts
 import repository_intelligence.impact as impact
 import repository_intelligence.models as models
 import repository_intelligence.overlap as overlap
+import repository_intelligence.retrieval as retrieval
 
 
 def test_importability_all_modules():
@@ -26,6 +27,7 @@ def test_importability_all_modules():
     assert cfi is not None
     assert eia is not None
     assert facts is not None
+    assert retrieval is not None
 
 
 def test_public_v1_1_operations():
@@ -43,6 +45,8 @@ def test_public_v1_1_operations():
         "verify_external_intelligence_automation_envelope",
         "analyze_structured_facts",
         "verify_structured_facts_report",
+        "analyze_repository_query",
+        "verify_repository_query_evidence",
         "build_repository_intelligence_report",
         "verify_repository_intelligence_report",
     ]
@@ -55,9 +59,11 @@ def test_claim_ceiling_constants():
     assert ri.CLAIM_CEILING == "PR_INTELLIGENCE_ONLY"
     assert ri.CI_EVIDENCE_CLAIM_CEILING == "CI_EVIDENCE_ONLY"
     assert ri.REPOSITORY_FACTS_CLAIM_CEILING == "REPOSITORY_FACTS_ONLY"
+    assert ri.REPOSITORY_QUERY_CLAIM_CEILING == "REPOSITORY_QUERY_EVIDENCE_ONLY"
     assert contracts.CLAIM_CEILING == "PR_INTELLIGENCE_ONLY"
     assert contracts.CI_EVIDENCE_CLAIM_CEILING == "CI_EVIDENCE_ONLY"
     assert contracts.REPOSITORY_FACTS_CLAIM_CEILING == "REPOSITORY_FACTS_ONLY"
+    assert contracts.REPOSITORY_QUERY_CLAIM_CEILING == "REPOSITORY_QUERY_EVIDENCE_ONLY"
 
 
 def test_no_reviewer_imports_under_repository_intelligence():

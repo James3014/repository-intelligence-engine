@@ -19,6 +19,7 @@ from repository_intelligence.contracts import (
     CI_EVIDENCE_CLAIM_CEILING,
     CLAIM_CEILING,
     REPOSITORY_FACTS_CLAIM_CEILING,
+    REPOSITORY_QUERY_CLAIM_CEILING,
 )
 from repository_intelligence.eia import AUTOMATION_CLAIM_CEILING
 
@@ -193,8 +194,55 @@ def sample_facts_data() -> dict:
     }
 
 
+@pytest.fixture
+def sample_query_data() -> dict:
+    return {
+        "snapshot": {
+            "repository": "owner/repo",
+            "pr_number": 42,
+            "head_sha": "aaaa1111",
+            "base_sha": "bbbb2222",
+            "current_main_sha": "bbbb2222",
+            "declared_base_sha": "bbbb2222",
+            "declared_head_sha": "aaaa1111",
+        },
+        "query_id": "symbols:revision_identity",
+        "query_digest": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "index_identity": {
+            "index_id": "python-ast-symbols-v1",
+            "index_revision": "idx-42",
+            "backend_id": "stdlib-pointer",
+        },
+        "retrievers": [
+            {
+                "identity": {
+                    "retriever_id": "exact_symbol",
+                    "index_id": "python-ast-symbols-v1",
+                    "index_revision": "idx-42",
+                    "retriever_version": "v1",
+                },
+                "ranked_candidates": [
+                    {
+                        "candidate_ref": "pkg/core.py::revision_identity",
+                        "source_rank": 1,
+                        "source_score": 1.0,
+                        "evidence_ref": "symbol-index:pkg/core.py:revision_identity",
+                        "match_class": "EXACT",
+                    }
+                ],
+                "complete": True,
+                "source_hits": 1,
+                "errors": [],
+            }
+        ],
+        "required_candidates": 5,
+        "collection_complete": True,
+        "collection_errors": [],
+    }
+
+
 def test_supported_operations_set() -> None:
-    assert OPERATIONS == frozenset({"revision", "readiness", "overlap", "ci", "impact", "cfi", "eia", "facts"})
+    assert OPERATIONS == frozenset({"revision", "readiness", "overlap", "ci", "impact", "cfi", "eia", "facts", "query"})
 
 
 def test_execute_operation_revision(sample_revision_snapshot: dict) -> None:
@@ -286,6 +334,22 @@ def test_execute_operation_facts(sample_facts_data: dict) -> None:
 
     with pytest.raises(ValueError, match="Input for 'facts' must be a JSON object mapping"):
         execute_operation("facts", ["not", "a", "dict"])
+
+
+def test_execute_operation_query(sample_query_data: dict) -> None:
+    payload = execute_operation("query", sample_query_data)
+    assert payload["operation"] == "query"
+    assert payload["claim_ceiling"] == REPOSITORY_QUERY_CLAIM_CEILING
+    result = payload["result"]
+    assert result["schema"] == "reviewer.repository_query_evidence.v1"
+    assert result["resolution"] == "EXACT_RESOLUTION"
+    assert result["is_complete"] is True
+    assert result["semantic_review_needed"] is False
+    assert result["exact_match_count"] == 1
+    assert result["distinct_candidate_count"] == 1
+
+    with pytest.raises(ValueError, match="Input for 'query' must be a JSON object mapping"):
+        execute_operation("query", "not a dict")
 
 
 def test_execute_operation_unsupported_or_invalid() -> None:
@@ -384,6 +448,7 @@ def test_subprocess_invocation(
     sample_cfi_snapshot: dict,
     sample_eia_data: dict,
     sample_facts_data: dict,
+    sample_query_data: dict,
 ) -> None:
     ci_file = tmp_path / "ci_input.json"
     ci_file.write_text(json.dumps(sample_ci_snapshot), encoding="utf-8")
@@ -455,4 +520,19 @@ def test_subprocess_invocation(
     assert payload_facts["operation"] == "facts"
     assert payload_facts["claim_ceiling"] == REPOSITORY_FACTS_CLAIM_CEILING
     assert payload_facts["result"]["is_complete"] is True
+
+    query_file = tmp_path / "query_input.json"
+    query_file.write_text(json.dumps(sample_query_data), encoding="utf-8")
+    proc_query = subprocess.run(
+        [sys.executable, "-m", "repository_intelligence.cli", "--operation", "query", "--input", str(query_file)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc_query.returncode == 0, proc_query.stderr
+    payload_query = json.loads(proc_query.stdout)
+    assert payload_query["operation"] == "query"
+    assert payload_query["claim_ceiling"] == REPOSITORY_QUERY_CLAIM_CEILING
+    assert payload_query["result"]["resolution"] == "EXACT_RESOLUTION"
+    assert payload_query["result"]["is_complete"] is True
 

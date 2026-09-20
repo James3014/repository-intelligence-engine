@@ -63,7 +63,7 @@ This makes the same intelligence reusable from GitHub Actions, Dev MCP, a CLI, P
 The following are canonical in this repository:
 
 - the `repository_intelligence` Python package;
-- all eight V1/V1.1 intelligence operations;
+- all nine V1/V1.1 intelligence operations;
 - the CLI adapter;
 - the read-only GitHub Action;
 - the GitHub REST acquisition adapter;
@@ -88,6 +88,7 @@ DevSpace can project the same engine through MCP, but DevSpace is a **consumer a
 | `cfi` | "Is CI failure evidence complete and diagnosis-worthy?" | separates no failure, expected-only failure, unexpected failure, and insufficient evidence | `CI_EVIDENCE_ONLY` |
 | `eia` | "May an external diagnosis action be considered for this exact evidence?" | creates a hash-bound, idempotent advisory envelope for unattended/cloud consumers | `AUTOMATION_ADVISORY_ONLY` |
 | `facts` | "What structured semantic facts does this exact revision contain?" | emits revision-bound, deterministic AST facts (`EMPTY_EXCEPTION_HANDLER`, `BROAD_EXCEPTION_HANDLER`, `SUBPROCESS_CALL`, `NETWORK_ENDPOINT_ADDED`, `VISIBLE_AUTH_CHECK`, `RELATED_TEST_CHANGED`, `SILENT_RETRY_PATTERN`, `HARDCODED_LOCALHOST`) | `REPOSITORY_FACTS_ONLY` |
+| `query` | "Which repository candidates should be narrowed toward this query?" | emits a bounded, deterministically fused candidate set with exact-match preservation, before any semantic review | `REPOSITORY_QUERY_EVIDENCE_ONLY` |
 
 ### Readiness dispositions
 
@@ -298,6 +299,61 @@ Facts are **advisory and revision-bound**:
 - a `PROVEN` semantic fact describes code shape only — it never grants approval, merge, release, or dispatch authority.
 
 Source parsing lives in adapters (for Python, `adapters/python_fact_detector.py` uses only the standard library `ast` module). The canonical engine stays language-neutral: it classifies and verifies observations regardless of which adapter produced them.
+
+---
+
+### 9. Selective repository retrieval evidence
+
+`query` emits a `reviewer.repository_query_evidence.v1` report that narrows repository candidates for a query before any semantic review. It never invokes an LLM, parses source code, or owns a language-specific retriever; it consumes normalized per-retriever ranked candidate lists produced by adapter-owned retrievers.
+
+A caller supplies normalized evidence:
+
+```json
+{
+  "snapshot": {
+    "repository": "owner/repo",
+    "pr_number": 77,
+    "head_sha": "head777",
+    "base_sha": "main000",
+    "current_main_sha": "main000"
+  },
+  "query_id": "symbols:revision_identity",
+  "query_digest": "aa…",
+  "index_identity": {
+    "index_id": "python-ast-symbols-v1",
+    "index_revision": "rev1",
+    "backend_id": "stdlib-pointer"
+  },
+  "retrievers": [
+    {
+      "identity": {"retriever_id": "exact_symbol", "index_id": "python-ast-symbols-v1",
+                   "index_revision": "rev1", "retriever_version": "v1"},
+      "ranked_candidates": [
+        {"candidate_ref": "pkg/app.py::Foo", "source_rank": 1,
+         "source_score": 1.0, "evidence_ref": "symbol-index:pkg/app.py:Foo",
+         "match_class": "EXACT"}
+      ],
+      "complete": true,
+      "errors": [],
+      "source_hits": 1
+    }
+  ],
+  "required_candidates": 8,
+  "collection_complete": true,
+  "collection_errors": []
+}
+```
+
+The engine fuses the supplied ranked lists deterministically (reciprocal-rank fusion, `k=60`), preserves every exact-match candidate (never dropped by lower-confidence retrieval), bounds the advisory candidate set to `required_candidates` (default 8), and derives a resolution:
+
+- `EXACT_RESOLUTION` — exactly one candidate carries an exact match class;
+- `BOUNDED_CANDIDATES` — a bounded candidate set with no decisive exact match;
+- `AMBIGUOUS_RETRIEVAL` — multiple exact matches, or more distinct candidates than the advisory bound (`AMBIGUOUS_CANDIDATES`);
+- `INSUFFICIENT_EVIDENCE` — invalid/stale revision identity, missing query id or digest, index binding mismatch, retriever collision/incompleteness/errors, duplicate candidate inflation, collection failure, or empty retrieval (`EMPTY_RETRIEVAL_NOT_ABSENCE` — never proof of absence).
+
+Semantic review is flagged (`semantic_review_needed`) only for `AMBIGUOUS_RETRIEVAL` and `INSUFFICIENT_EVIDENCE`. Retrieval evidence is advisory and binding-less: a resolved query never grants routing, worker selection, merge, release, dispatch, or Candidate-acceptance authority.
+
+`verify_repository_query_evidence` recomputes the index binding, candidate normalization, fusion, origin of each candidate, resolution, and completeness from the embedded neutral inputs and rejects retriever-list substitution, stale/different-revision candidates, rank/score tampering, duplicate candidate inflation, misreported completeness, and exact-match evidence dropped by lower-confidence retrieval.
 
 ---
 

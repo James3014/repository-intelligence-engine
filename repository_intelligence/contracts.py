@@ -15,6 +15,7 @@ from .models import Disposition
 CLAIM_CEILING = "PR_INTELLIGENCE_ONLY"
 CI_EVIDENCE_CLAIM_CEILING = "CI_EVIDENCE_ONLY"
 REPOSITORY_FACTS_CLAIM_CEILING = "REPOSITORY_FACTS_ONLY"
+REPOSITORY_QUERY_CLAIM_CEILING = "REPOSITORY_QUERY_EVIDENCE_ONLY"
 
 
 class EvidenceCompleteness(str, Enum):
@@ -307,9 +308,197 @@ class CIFailureFingerprint:
             "expected_run_id": self.expected_run_id,
             "expected_job_identity": self.expected_job_identity,
             "expected_artifact_identity": self.expected_artifact_identity,
-            "evidence_gaps": list(self.evidence_gaps),
-            "is_complete": self.is_complete,
+"evidence_gaps": list(self.evidence_gaps),
             "evidence_completeness": self.evidence_completeness.value,
+            "is_complete": self.is_complete,
+            "claim_ceiling": self.claim_ceiling,
+            "content_sha256": self.content_sha256,
+        }
+
+
+class RepositoryQueryResolution(str, Enum):
+    """Deterministic advisory retrieval-resolution states.
+
+    These are binding-less advisory states for candidate narrowing only.
+    They never select a worker or grant routing/acceptance authority.
+    """
+
+    EXACT_RESOLUTION = "EXACT_RESOLUTION"
+    BOUNDED_CANDIDATES = "BOUNDED_CANDIDATES"
+    AMBIGUOUS_RETRIEVAL = "AMBIGUOUS_RETRIEVAL"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+
+
+class CandidateMatchClass(str, Enum):
+    """Advisory match classes attached to a candidate by exactly one retriever."""
+
+    EXACT = "EXACT"
+    LEXICAL = "LEXICAL"
+    GRAPH = "GRAPH"
+    VECTOR = "VECTOR"
+    OTHER = "OTHER"
+
+
+@dataclass(frozen=True)
+class RetrieverIdentityV1:
+    """Exact identity of one retrieval source binding a query to a revision."""
+
+    retriever_id: str
+    index_id: str
+    index_revision: str
+    backend_id: str = ""
+    retriever_version: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "retriever_id": self.retriever_id,
+            "index_id": self.index_id,
+            "index_revision": self.index_revision,
+        }
+        if self.backend_id:
+            d["backend_id"] = self.backend_id
+        if self.retriever_version:
+            d["retriever_version"] = self.retriever_version
+        return d
+
+
+@dataclass(frozen=True)
+class RankedCandidateV1:
+    """One candidate as returned by exactly one retriever source."""
+
+    candidate_ref: str
+    source_rank: int
+    source_score: float | None = None
+    evidence_ref: str = ""
+    match_class: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "candidate_ref": self.candidate_ref,
+            "source_rank": self.source_rank,
+        }
+        if self.source_score is not None:
+            d["source_score"] = self.source_score
+        if self.evidence_ref:
+            d["evidence_ref"] = self.evidence_ref
+        if self.match_class:
+            d["match_class"] = self.match_class
+        return d
+
+
+@dataclass(frozen=True)
+class RetrieverRunV1:
+    """Exactly one completed (or incomplete) retrieval run bound to a revision."""
+
+    identity: RetrieverIdentityV1
+    ranked_candidates: tuple[RankedCandidateV1, ...] = ()
+    complete: bool = False
+    coverage_note: str = ""
+    errors: tuple[str, ...] = ()
+    source_hits: int = 0
+    latency_ms: int | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "ranked_candidates", tuple(self.ranked_candidates))
+        object.__setattr__(self, "errors", tuple(self.errors))
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "identity": self.identity.to_dict(),
+            "ranked_candidates": [c.to_dict() for c in self.ranked_candidates],
+            "complete": self.complete,
+            "source_hits": self.source_hits,
+        }
+        if self.coverage_note:
+            d["coverage_note"] = self.coverage_note
+        if self.errors:
+            d["errors"] = list(self.errors)
+        if self.latency_ms is not None:
+            d["latency_ms"] = self.latency_ms
+        return d
+
+
+@dataclass(frozen=True)
+class FusedCandidateV1:
+    """One fused candidate preserving per-source provenance."""
+
+    candidate_ref: str
+    fused_rank: int
+    fused_score: float
+    exact_match: bool = False
+    per_source_refs: tuple[RankedCandidateV1, ...] = ()
+    matched_sources: tuple[str, ...] = ()
+    matched_source_count: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "per_source_refs", tuple(self.per_source_refs))
+        object.__setattr__(self, "matched_sources", tuple(self.matched_sources))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "candidate_ref": self.candidate_ref,
+            "fused_rank": self.fused_rank,
+            "fused_score": self.fused_score,
+            "exact_match": self.exact_match,
+            "per_source_refs": [r.to_dict() for r in self.per_source_refs],
+            "matched_sources": list(self.matched_sources),
+            "matched_source_count": self.matched_source_count,
+        }
+
+
+@dataclass(frozen=True)
+class RepositoryQueryEvidenceReportV1:
+    """Hash-bound revision-bound advisory repository-query evidence.
+
+    The report narrows candidates before any semantic review. It never
+    invokes a model, selects a worker, or grants routing/acceptance authority.
+    """
+
+    identity: RevisionIdentity
+    query_id: str
+    query_digest: str
+    index_identity: RetrieverIdentityV1 | None
+    retrievers: tuple[RetrieverRunV1, ...] = ()
+    fused_candidates: tuple[FusedCandidateV1, ...] = ()
+    resolution: RepositoryQueryResolution = RepositoryQueryResolution.INSUFFICIENT_EVIDENCE
+    reason_codes: tuple[str, ...] = ()
+    evidence_gaps: tuple[str, ...] = ()
+    evidence_completeness: EvidenceCompleteness = EvidenceCompleteness.INCOMPLETE
+    is_complete: bool = False
+    required_candidates: int = 8
+    distinct_candidate_count: int = 0
+    exact_match_count: int = 0
+    semantic_review_needed: bool = False
+    content_sha256: str = ""
+    schema: str = "reviewer.repository_query_evidence.v1"
+    claim_ceiling: str = REPOSITORY_QUERY_CLAIM_CEILING
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "retrievers", tuple(self.retrievers))
+        object.__setattr__(self, "fused_candidates", tuple(self.fused_candidates))
+        object.__setattr__(self, "reason_codes", tuple(self.reason_codes))
+        object.__setattr__(self, "evidence_gaps", tuple(self.evidence_gaps))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": self.schema,
+            "identity": self.identity.to_dict(),
+            "query_id": self.query_id,
+            "query_digest": self.query_digest,
+            "index_identity": (
+                self.index_identity.to_dict() if self.index_identity is not None else None
+            ),
+            "retrievers": [r.to_dict() for r in self.retrievers],
+            "fused_candidates": [c.to_dict() for c in self.fused_candidates],
+            "resolution": self.resolution.value,
+            "reason_codes": list(self.reason_codes),
+            "evidence_gaps": list(self.evidence_gaps),
+            "evidence_completeness": self.evidence_completeness.value,
+            "is_complete": self.is_complete,
+            "required_candidates": self.required_candidates,
+            "distinct_candidate_count": self.distinct_candidate_count,
+            "exact_match_count": self.exact_match_count,
+            "semantic_review_needed": self.semantic_review_needed,
             "claim_ceiling": self.claim_ceiling,
             "content_sha256": self.content_sha256,
         }
