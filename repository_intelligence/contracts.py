@@ -14,6 +14,7 @@ from .models import Disposition
 
 CLAIM_CEILING = "PR_INTELLIGENCE_ONLY"
 CI_EVIDENCE_CLAIM_CEILING = "CI_EVIDENCE_ONLY"
+REPOSITORY_FACTS_CLAIM_CEILING = "REPOSITORY_FACTS_ONLY"
 
 
 class EvidenceCompleteness(str, Enum):
@@ -515,6 +516,181 @@ class RepositoryIntelligenceReportV1:
             "items": [item.to_dict() for item in self.items],
             "evidence_completeness": self.evidence_completeness.value,
             "evidence_gaps": list(self.evidence_gaps),
+            "claim_ceiling": self.claim_ceiling,
+            "content_sha256": self.content_sha256,
+        }
+
+
+class RepositoryFactKind(str, Enum):
+    """Deterministic repository fact kinds emitted by structured facts.
+
+    Naming follows the RIE convention of explicit, machine-readable kinds.
+    Each kind is advisory repository evidence, never a review verdict.
+    """
+
+    EMPTY_EXCEPTION_HANDLER = "EMPTY_EXCEPTION_HANDLER"
+    BROAD_EXCEPTION_HANDLER = "BROAD_EXCEPTION_HANDLER"
+    SUBPROCESS_CALL = "SUBPROCESS_CALL"
+    NETWORK_ENDPOINT_ADDED = "NETWORK_ENDPOINT_ADDED"
+    VISIBLE_AUTH_CHECK = "VISIBLE_AUTH_CHECK"
+    RELATED_TEST_CHANGED = "RELATED_TEST_CHANGED"
+    SILENT_RETRY_PATTERN = "SILENT_RETRY_PATTERN"
+    HARDCODED_LOCALHOST = "HARDCODED_LOCALHOST"
+
+
+class RepositoryFactStatus(str, Enum):
+    """Status of one structured repository fact.
+
+    - PROVEN: deterministic evidence exists at a bound revision.
+    - NOT_OBSERVED: deterministic detectors covered the requested scope and
+      found no evidence for this fact kind.
+    - UNKNOWN: the fact cannot be proven deterministically here (for example,
+      no detector exists for the language/kind); a scope limitation, not a
+      negative finding.
+    - UNRESOLVED: evidence is stale, incomplete, or invalid, so no status may
+      be trusted; fails closed.
+    """
+
+    PROVEN = "PROVEN"
+    NOT_OBSERVED = "NOT_OBSERVED"
+    UNKNOWN = "UNKNOWN"
+    UNRESOLVED = "UNRESOLVED"
+
+
+@dataclass(frozen=True)
+class RepositoryFactEvidenceV1:
+    """One normalized source or diff-location evidence reference for a fact.
+
+    ``line`` of 0 denotes file-level evidence (no specific line), used only by
+    diff/path-derived facts such as ``RELATED_TEST_CHANGED``.
+    """
+
+    file_path: str
+    line: int
+    column: int
+    evidence_ref: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "file_path": self.file_path,
+            "line": self.line,
+            "column": self.column,
+            "evidence_ref": self.evidence_ref,
+        }
+
+
+@dataclass(frozen=True)
+class RepositoryFactV1:
+    """One revision-bound structured fact for a single fact kind."""
+
+    fact_kind: RepositoryFactKind
+    status: RepositoryFactStatus
+    head_sha: str
+    language: str
+    evidence: tuple[RepositoryFactEvidenceV1, ...] = ()
+    reason_codes: tuple[str, ...] = ()
+    limitations: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "evidence", tuple(self.evidence))
+        object.__setattr__(self, "reason_codes", tuple(self.reason_codes))
+        object.__setattr__(self, "limitations", tuple(self.limitations))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "fact_kind": self.fact_kind.value,
+            "status": self.status.value,
+            "head_sha": self.head_sha,
+            "language": self.language,
+            "evidence": [item.to_dict() for item in self.evidence],
+            "reason_codes": list(self.reason_codes),
+            "limitations": list(self.limitations),
+        }
+
+
+@dataclass(frozen=True)
+class StructuredFactsReportV1:
+    """Hash-bound, revision-bound structured repository facts report.
+
+    The report is advisory repository evidence. It grants no review approval,
+    merge, release, dispatch, or Candidate-acceptance authority.
+    """
+
+    identity: RevisionIdentity
+    language: str
+    detector_version: str
+    covered_files: tuple[str, ...]
+    changed_files: tuple[str, ...]
+    requested_facts: tuple[str, ...]
+    detector_coverage: Mapping[str, bool] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    observations: tuple[Mapping[str, Any], ...] = ()
+    collection_complete: bool = False
+    collection_errors: tuple[str, ...] = ()
+    facts: tuple[RepositoryFactV1, ...] = ()
+    limitations: Mapping[str, tuple[str, ...]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    evidence_gaps: tuple[str, ...] = ()
+    evidence_completeness: EvidenceCompleteness = EvidenceCompleteness.INCOMPLETE
+    is_complete: bool = False
+    content_sha256: str = ""
+    schema: str = "reviewer.structured_facts.v1"
+    claim_ceiling: str = REPOSITORY_FACTS_CLAIM_CEILING
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "covered_files", tuple(self.covered_files))
+        object.__setattr__(self, "changed_files", tuple(self.changed_files))
+        object.__setattr__(self, "requested_facts", tuple(self.requested_facts))
+        if isinstance(self.detector_coverage, Mapping):
+            frozen_cov = MappingProxyType({
+                str(k): bool(v) for k, v in self.detector_coverage.items()
+            })
+        else:
+            frozen_cov = MappingProxyType({})
+        object.__setattr__(self, "detector_coverage", frozen_cov)
+        object.__setattr__(self, "observations", tuple(self.observations))
+        object.__setattr__(self, "collection_errors", tuple(self.collection_errors))
+        object.__setattr__(self, "facts", tuple(self.facts))
+        if isinstance(self.limitations, Mapping):
+            frozen_lims = MappingProxyType({
+                str(k): tuple(v) for k, v in self.limitations.items()
+            })
+        else:
+            frozen_lims = MappingProxyType({})
+        object.__setattr__(self, "limitations", frozen_lims)
+        object.__setattr__(self, "evidence_gaps", tuple(self.evidence_gaps))
+
+    @property
+    def fact_statuses(self) -> Mapping[str, str]:
+        return MappingProxyType({
+            fact.fact_kind.value: fact.status.value for fact in self.facts
+        })
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": self.schema,
+            "identity": self.identity.to_dict(),
+            "language": self.language,
+            "detector_version": self.detector_version,
+            "covered_files": list(self.covered_files),
+            "changed_files": list(self.changed_files),
+            "requested_facts": list(self.requested_facts),
+            "detector_coverage": {
+                str(k): bool(v) for k, v in sorted(self.detector_coverage.items())
+            },
+            "observations": [dict(obs) for obs in self.observations],
+            "collection_complete": self.collection_complete,
+            "collection_errors": list(self.collection_errors),
+            "facts": [fact.to_dict() for fact in self.facts],
+            "limitations": {
+                str(k): list(v)
+                for k, v in sorted(self.limitations.items())
+            },
+            "evidence_gaps": list(self.evidence_gaps),
+            "evidence_completeness": self.evidence_completeness.value,
+            "is_complete": self.is_complete,
             "claim_ceiling": self.claim_ceiling,
             "content_sha256": self.content_sha256,
         }

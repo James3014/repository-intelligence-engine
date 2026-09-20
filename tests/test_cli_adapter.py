@@ -18,6 +18,7 @@ from repository_intelligence.cli import (
 from repository_intelligence.contracts import (
     CI_EVIDENCE_CLAIM_CEILING,
     CLAIM_CEILING,
+    REPOSITORY_FACTS_CLAIM_CEILING,
 )
 from repository_intelligence.eia import AUTOMATION_CLAIM_CEILING
 
@@ -155,8 +156,45 @@ def sample_eia_data(sample_cfi_snapshot: dict) -> dict:
     }
 
 
+@pytest.fixture
+def sample_facts_data() -> dict:
+    return {
+        "snapshot": {
+            "repository": "owner/repo",
+            "pr_number": 42,
+            "head_sha": "aaaa1111",
+            "base_sha": "bbbb2222",
+            "current_main_sha": "bbbb2222",
+            "declared_base_sha": "bbbb2222",
+            "declared_head_sha": "aaaa1111",
+            "changed_files": ["pkg/util.py", "tests/test_util.py"],
+        },
+        "language": "python",
+        "covered_files": ["pkg/util.py"],
+        "detector_version": "python-ast-v1",
+        "detector_coverage": {
+            "EMPTY_EXCEPTION_HANDLER": True,
+            "BROAD_EXCEPTION_HANDLER": True,
+            "SUBPROCESS_CALL": True,
+            "SILENT_RETRY_PATTERN": True,
+            "HARDCODED_LOCALHOST": True,
+        },
+        "observations": [
+            {
+                "fact_kind": "EMPTY_EXCEPTION_HANDLER",
+                "file_path": "pkg/util.py",
+                "line": 3,
+                "column": 0,
+                "evidence_ref": "empty_except_handler",
+            }
+        ],
+        "collection_complete": True,
+        "collection_errors": [],
+    }
+
+
 def test_supported_operations_set() -> None:
-    assert OPERATIONS == frozenset({"revision", "readiness", "overlap", "ci", "impact", "cfi", "eia"})
+    assert OPERATIONS == frozenset({"revision", "readiness", "overlap", "ci", "impact", "cfi", "eia", "facts"})
 
 
 def test_execute_operation_revision(sample_revision_snapshot: dict) -> None:
@@ -232,6 +270,22 @@ def test_execute_operation_eia(sample_eia_data: dict) -> None:
     result = payload["result"]
     assert result["decision"] == "READY"
     assert result["action_kind"] == "CI_FAILURE_DIAGNOSIS"
+
+
+def test_execute_operation_facts(sample_facts_data: dict) -> None:
+    payload = execute_operation("facts", sample_facts_data)
+    assert payload["operation"] == "facts"
+    assert payload["claim_ceiling"] == REPOSITORY_FACTS_CLAIM_CEILING
+    result = payload["result"]
+    assert result["schema"] == "reviewer.structured_facts.v1"
+    assert result["is_complete"] is True
+    statuses = {fact["fact_kind"]: fact["status"] for fact in result["facts"]}
+    assert statuses["EMPTY_EXCEPTION_HANDLER"] == "PROVEN"
+    assert statuses["NETWORK_ENDPOINT_ADDED"] == "UNKNOWN"
+    assert statuses["RELATED_TEST_CHANGED"] == "PROVEN"
+
+    with pytest.raises(ValueError, match="Input for 'facts' must be a JSON object mapping"):
+        execute_operation("facts", ["not", "a", "dict"])
 
 
 def test_execute_operation_unsupported_or_invalid() -> None:
@@ -329,6 +383,7 @@ def test_subprocess_invocation(
     sample_impact_data: dict,
     sample_cfi_snapshot: dict,
     sample_eia_data: dict,
+    sample_facts_data: dict,
 ) -> None:
     ci_file = tmp_path / "ci_input.json"
     ci_file.write_text(json.dumps(sample_ci_snapshot), encoding="utf-8")
@@ -386,4 +441,18 @@ def test_subprocess_invocation(
     assert payload_eia["operation"] == "eia"
     assert payload_eia["claim_ceiling"] == AUTOMATION_CLAIM_CEILING
     assert payload_eia["result"]["decision"] == "READY"
+
+    facts_file = tmp_path / "facts_input.json"
+    facts_file.write_text(json.dumps(sample_facts_data), encoding="utf-8")
+    proc_facts = subprocess.run(
+        [sys.executable, "-m", "repository_intelligence.cli", "--operation", "facts", "--input", str(facts_file)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc_facts.returncode == 0, proc_facts.stderr
+    payload_facts = json.loads(proc_facts.stdout)
+    assert payload_facts["operation"] == "facts"
+    assert payload_facts["claim_ceiling"] == REPOSITORY_FACTS_CLAIM_CEILING
+    assert payload_facts["result"]["is_complete"] is True
 
