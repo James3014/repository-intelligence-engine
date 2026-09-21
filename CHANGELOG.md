@@ -29,6 +29,29 @@ The project follows semantic versioning while it remains in the `0.x` series. Im
 
 - Full test suite: 248 passed.
 
+## [Unreleased: Issue #29]
+
+### Added
+
+- New `query` operation emitting a `reviewer.repository_query_evidence.v1` report that narrows repository candidates for a query before any semantic review.
+- `RetrieverIdentityV1`, `RankedCandidateV1`, `RetrieverRunV1`, `FusedCandidateV1`, `RepositoryQueryEvidenceReportV1`, `CandidateMatchClass`, and `RepositoryQueryResolution` contracts plus the `REPOSITORY_QUERY_EVIDENCE_ONLY` claim ceiling.
+- `analyze_repository_query` fusion engine and `verify_repository_query_evidence` semantic verifier (recomputes index binding, candidate normalization, reciprocal-rank fusion with `k=60`, origin, resolution, and completeness from embedded neutral inputs).
+- `scripts/benchmark_retrieval.py` synthetic retrieval throughput benchmark.
+
+### Changed
+
+- CLI now exposes nine operations (`query` added); README documents the `query` capability, deterministic fusion, exact-match preservation, bounded candidate sets, and the fail-closed resolution ladder.
+
+### Safety boundary
+
+- Retrieval evidence is advisory and binding-less: a resolved query never grants routing, worker selection, merge, release, dispatch, or Candidate-acceptance authority.
+- Empty retrieval is never proof of absence (`EMPTY_RETRIEVAL_NOT_ABSENCE`); semantic review is flagged only for `AMBIGUOUS_RETRIEVAL` and `INSUFFICIENT_EVIDENCE`.
+- Stale/different-revision candidates, retriever-index substitution, duplicate candidate inflation, and exact-match evidence dropped by lower-confidence retrieval are rejected by the verifier.
+
+### Verification
+
+- Full test suite: 272 passed.
+
 ## [0.1.2] - 2026-09-16
 
 ### Added
