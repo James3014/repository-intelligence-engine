@@ -458,6 +458,7 @@ class RepositoryQueryEvidenceReportV1:
     query_id: str
     query_digest: str
     index_identity: RetrieverIdentityV1 | None
+    source_evidence: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     retrievers: tuple[RetrieverRunV1, ...] = ()
     fused_candidates: tuple[FusedCandidateV1, ...] = ()
     resolution: RepositoryQueryResolution = RepositoryQueryResolution.INSUFFICIENT_EVIDENCE
@@ -474,6 +475,10 @@ class RepositoryQueryEvidenceReportV1:
     claim_ceiling: str = REPOSITORY_QUERY_CLAIM_CEILING
 
     def __post_init__(self) -> None:
+        if isinstance(self.source_evidence, Mapping):
+            object.__setattr__(self, "source_evidence", MappingProxyType(dict(self.source_evidence)))
+        else:
+            object.__setattr__(self, "source_evidence", MappingProxyType({}))
         object.__setattr__(self, "retrievers", tuple(self.retrievers))
         object.__setattr__(self, "fused_candidates", tuple(self.fused_candidates))
         object.__setattr__(self, "reason_codes", tuple(self.reason_codes))
@@ -488,6 +493,7 @@ class RepositoryQueryEvidenceReportV1:
             "index_identity": (
                 self.index_identity.to_dict() if self.index_identity is not None else None
             ),
+            "source_evidence": dict(self.source_evidence),
             "retrievers": [r.to_dict() for r in self.retrievers],
             "fused_candidates": [c.to_dict() for c in self.fused_candidates],
             "resolution": self.resolution.value,

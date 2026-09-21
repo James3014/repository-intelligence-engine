@@ -66,6 +66,18 @@ _RESOLUTION_REVIEW_NEEDED = {
 }
 
 
+def _canonical_source_evidence(data: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the exact JSON-like neutral inputs used for semantic recomputation.
+
+    The verifier must be able to rerun every deterministic derivation from
+    embedded evidence instead of trusting caller-editable evidence_gaps.
+    """
+    try:
+        return json.loads(json.dumps(data, sort_keys=True, separators=(",", ":")))
+    except (TypeError, ValueError) as exc:
+        raise TypeError("repository query input must be JSON-serializable") from exc
+
+
 def _content_hash(payload: Mapping[str, Any]) -> str:
     unsigned = dict(payload)
     unsigned.pop("content_sha256", None)
@@ -632,6 +644,9 @@ def analyze_repository_query(data: Mapping[str, Any]) -> RepositoryQueryEvidence
     if not isinstance(data, Mapping):
         raise TypeError("repository query input must be a mapping")
 
+    source_evidence = _canonical_source_evidence(data)
+    data = source_evidence
+
     gaps: list[str] = []
     snapshot = data.get("snapshot")
     if not isinstance(snapshot, Mapping):
@@ -711,6 +726,7 @@ def analyze_repository_query(data: Mapping[str, Any]) -> RepositoryQueryEvidence
         query_id=query_id,
         query_digest=query_digest,
         index_identity=index_identity,
+        source_evidence=source_evidence,
         retrievers=tuple(retrievers),
         fused_candidates=tuple(fused_candidates),
         resolution=resolution,
@@ -732,55 +748,13 @@ def analyze_repository_query(data: Mapping[str, Any]) -> RepositoryQueryEvidence
     return replace(report, content_sha256=_content_hash(report.to_dict()))
 
 
-def _identity_from_payload(payload: Mapping[str, Any]) -> RevisionIdentity:
-    identity = payload.get("identity")
-    if not isinstance(identity, Mapping):
-        raise ValueError("report identity missing or invalid")
-    primitive = {
-        "repository": identity.get("repository"),
-        "pr_number": identity.get("pr_number"),
-        "head_sha": identity.get("head_sha"),
-        "base_sha": identity.get("base_sha"),
-        "current_main_sha": identity.get("current_main_sha"),
-        "declared_base_sha": identity.get("declared_base_sha"),
-        "declared_head_sha": identity.get("declared_head_sha"),
-        "declared_main_sha": identity.get("declared_main_sha"),
-    }
-    recomputed = revision_identity(primitive)
-    if dict(identity) != recomputed.to_dict():
-        raise ValueError("report identity derived fields do not match recomputed identity")
-    return recomputed
-
-
-def _payload_identity(payload: Mapping[str, Any]) -> tuple[RevisionIdentity, bool]:
-    identity_raw = payload.get("identity")
-    if not isinstance(identity_raw, Mapping):
-        return RevisionIdentity("", "", "", ""), False
-    expected_review_identity = [
-        identity_raw.get("repository"),
-        identity_raw.get("pr_number"),
-        identity_raw.get("head_sha"),
-        identity_raw.get("base_sha"),
-        identity_raw.get("current_main_sha"),
-    ]
-    if identity_raw.get("review_identity") != expected_review_identity:
-        return RevisionIdentity("", "", "", ""), False
-    try:
-        return _identity_from_payload(payload), True
-    except (ValueError, TypeError):
-        return RevisionIdentity("", "", "", ""), False
-
-
 def verify_repository_query_evidence(payload: Mapping[str, Any]) -> bool:
-    """Verify the hash binding and all deterministic retrieval semantics
-    recomputable from the embedded neutral inputs.
+    """Recompute the full report from embedded neutral source evidence.
 
-    The verifier recomputes the index binding, candidate normalization, fusion,
-    resolution, and completeness from the embedded retriever primes and rejects
-    any payload whose derived fields differ. This catches retriever-list
-    substitution, stale/different-revision candidates, rank/score tampering,
-    duplicate candidate inflation, misreported completeness, and exact-match
-    evidence dropped by lower-confidence retrieval.
+    The source evidence is the canonical JSON-like input actually consumed by
+    analyze_repository_query. Re-running the analyzer prevents a caller from
+    deleting collection/normalization gaps, changing a derived disposition,
+    and merely recomputing the outer content hash.
     """
     if not isinstance(payload, Mapping):
         return False
@@ -788,141 +762,22 @@ def verify_repository_query_evidence(payload: Mapping[str, Any]) -> bool:
         return False
     if payload.get("claim_ceiling") != REPOSITORY_QUERY_CLAIM_CEILING:
         return False
-    supplied_hash = payload.get("content_sha256")
-    if not (
-        isinstance(supplied_hash, str)
-        and len(supplied_hash) == 64
-        and supplied_hash == _content_hash(payload)
-    ):
+
+    source_evidence = payload.get("source_evidence")
+    if not isinstance(source_evidence, Mapping):
         return False
 
-    identity, identity_ok = _payload_identity(payload)
-    if not identity_ok:
-        return False
-
-    query_id = payload.get("query_id")
-    query_digest = payload.get("query_digest")
-    if not isinstance(query_id, str) or query_id != query_id.strip() or not query_id:
-        return False
-    if not isinstance(query_digest, str) or not query_digest.strip():
-        return False
-
-    index_raw = payload.get("index_identity")
-    index_identity: RetrieverIdentityV1 | None = None
-    if index_raw is not None:
-        if not isinstance(index_raw, Mapping):
-            return False
-        index_id = index_raw.get("index_id")
-        index_revision = index_raw.get("index_revision")
-        if not isinstance(index_id, str) or not isinstance(index_revision, str):
-            return False
-        backend_id = index_raw.get("backend_id") if isinstance(index_raw.get("backend_id"), str) else ""
-        index_identity = RetrieverIdentityV1(
-            retriever_id="",
-            index_id=index_id,
-            index_revision=index_revision,
-            backend_id=backend_id,
-        )
-
-    retrievers_raw = payload.get("retrievers")
-    if not isinstance(retrievers_raw, list):
-        return False
-    rebuilt_problems: list[str] = []
-    rebuilt_gaps: list[str] = []
-    rebuilt_retrievers = _normalize_retrievers(
-        {"retrievers": retrievers_raw},
-        index_identity=index_identity,
-        gaps=rebuilt_gaps,
-    )
-    rebuilt_retrievers_dicts = [run.to_dict() for run in rebuilt_retrievers]
-    supplied_retrievers = payload.get("retrievers")
-    if supplied_retrievers != rebuilt_retrievers_dicts:
-        return False
-
-    rebuilt_index_identity = (_normalize_index_identity({"index_identity": payload.get("index_identity")}, gaps=[]) if payload.get("index_identity") is not None else None)
-    expected_index_dict = index_identity.to_dict() if index_identity is not None else None
-    if rebuilt_index_identity is not None and expected_index_dict is not None:
-        if rebuilt_index_identity.to_dict() != expected_index_dict:
-            return False
-
-    required_raw = payload.get("required_candidates")
-    if isinstance(required_raw, bool) or not isinstance(required_raw, int) or required_raw <= 0:
-        return False
-    required_candidates = required_raw
-
-    rebuilt_fused = _fuse_candidates(
-        rebuilt_retrievers, required_candidates=required_candidates
-    )
-    supplied_fused = payload.get("fused_candidates")
-    expected_fused = [candidate.to_dict() for candidate in rebuilt_fused]
-    if supplied_fused != expected_fused:
-        return False
-
-    rebuilt_distinct = len({
-        candidate.candidate_ref
-        for run in rebuilt_retrievers
-        for candidate in run.ranked_candidates
-    })
-    rebuilt_exact = len({
-        candidate.candidate_ref
-        for run in rebuilt_retrievers
-        for candidate in run.ranked_candidates
-        if candidate.match_class in EXACT_MATCH_CLASSES
-    })
-
-    resolution_raw = payload.get("resolution")
     try:
-        resolution = RepositoryQueryResolution(resolution_raw)
+        recomputed = analyze_repository_query(source_evidence).to_dict()
     except (TypeError, ValueError):
         return False
-    rebuilt_resolution, rebuilt_reason = _derive_resolution(
-        identity=identity,
-        query_id=query_id,
-        query_digest=query_digest,
-        gaps=tuple(payload.get("evidence_gaps", ())),
-        index_identity=index_identity,
-        retrievers=rebuilt_retrievers,
-        required_candidates=required_candidates,
-    )
-    if rebuilt_resolution != resolution:
+
+    if dict(payload) != recomputed:
         return False
-    if payload.get("reason_codes") != list(rebuilt_reason):
-        return False
+
     if (
-        resolution is RepositoryQueryResolution.INSUFFICIENT_EVIDENCE
-        and rebuilt_reason != (_REASON_EMPTY_RETRIEVAL_NOT_ABSENCE,)
+        recomputed["resolution"] == RepositoryQueryResolution.INSUFFICIENT_EVIDENCE.value
+        and recomputed["reason_codes"] != [_REASON_EMPTY_RETRIEVAL_NOT_ABSENCE]
     ):
         return False
-
-    if payload.get("distinct_candidate_count") != rebuilt_distinct:
-        return False
-    if payload.get("exact_match_count") != rebuilt_exact:
-        return False
-    reviewed = resolution in _RESOLUTION_REVIEW_NEEDED
-    if payload.get("semantic_review_needed") is not reviewed:
-        return False
-
-    derived_completeness = _derive_completeness(
-        identity=identity,
-        gaps=tuple(payload.get("evidence_gaps", ())),
-        required_candidates=required_candidates,
-        resolution=resolution,
-    )
-    if payload.get("evidence_completeness") != derived_completeness.value:
-        return False
-    derived_is_complete = derived_completeness is EvidenceCompleteness.COMPLETE and (
-        resolution in {
-            RepositoryQueryResolution.EXACT_RESOLUTION,
-            RepositoryQueryResolution.BOUNDED_CANDIDATES,
-        }
-    )
-    if payload.get("is_complete") is not derived_is_complete:
-        return False
-
-    gaps = payload.get("evidence_gaps")
-    if not isinstance(gaps, list) or any(not isinstance(gap, str) for gap in gaps):
-        return False
-    if derived_is_complete:
-        if gaps or not identity.is_valid or identity.stale_evidence:
-            return False
     return True

@@ -395,7 +395,30 @@ def test_collection_errors_block_resolution():
     payload = report.to_dict()
     assert payload["resolution"] == "INSUFFICIENT_EVIDENCE"
     assert "index build failed" in payload["evidence_gaps"]
+    assert payload["source_evidence"]["collection_errors"] == ["index build failed"]
     assert verify_repository_query_evidence(payload) is False
+
+
+def test_rehashed_gap_omission_cannot_upgrade_bound_source_evidence():
+    payload = analyze_repository_query(
+        _query_data(collection_complete=True, collection_errors=["index build failed"])
+    ).to_dict()
+    forged = json.loads(json.dumps(payload))
+    forged["evidence_gaps"] = []
+    forged["resolution"] = "EXACT_RESOLUTION"
+    forged["reason_codes"] = []
+    forged["evidence_completeness"] = "COMPLETE"
+    forged["is_complete"] = True
+    forged["semantic_review_needed"] = False
+
+    import hashlib as _hashlib
+
+    unsigned = {k: v for k, v in forged.items() if k != "content_sha256"}
+    canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"))
+    forged["content_sha256"] = _hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    assert forged["source_evidence"]["collection_errors"] == ["index build failed"]
+    assert verify_repository_query_evidence(forged) is False
 
 
 def test_default_required_candidates_is_eight():
