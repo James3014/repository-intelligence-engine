@@ -20,7 +20,13 @@ from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
 from .contracts import (
+    FUSION_POLICY_RRF_K60_WEIGHTED,
     REPOSITORY_QUERY_CLAIM_CEILING,
+    SUPPORTED_FUSION_POLICIES,
+    SUPPORTED_TASK_ROLES,
+    TASK_AWARE_QUERY_CLAIM_CEILING,
+    TASK_AWARE_SCHEMA_V1,
+    TASK_ROLE_TEST_SELECTION,
     CandidateMatchClass,
     EvidenceCompleteness,
     FusedCandidateV1,
@@ -30,6 +36,8 @@ from .contracts import (
     RetrieverIdentityV1,
     RetrieverRunV1,
     RevisionIdentity,
+    TaskAwareQueryContextV1,
+    TaskAwareQueryReportV1,
 )
 from .core import revision_identity
 
@@ -59,6 +67,21 @@ _REASON_EMPTY_RETRIEVAL_NOT_ABSENCE = "EMPTY_RETRIEVAL_NOT_ABSENCE"
 _REASON_AMBIGUOUS_CANDIDATES = "AMBIGUOUS_CANDIDATES"
 _REASON_MULTIPLE_EXACT_MATCHES = "MULTIPLE_EXACT_MATCHES"
 _REASON_REQUIRED_CANDIDATES_INVALID = "REQUIRED_CANDIDATES_INVALID"
+_REASON_TASK_ROLE_INVALID = "TASK_ROLE_INVALID"
+_REASON_FUSION_POLICY_INVALID = "FUSION_POLICY_INVALID"
+
+DEFAULT_TASK_ROLE_WEIGHTS: dict[str, dict[str, float]] = {
+    "general_localization": {
+        "path_lexical": 1.0,
+        "content_bm25": 1.0,
+        "history_cochange": 1.0,
+    },
+    "test_selection": {
+        "path_lexical": 1.0,
+        "content_bm25": 1.0,
+        "history_cochange": 1.5,
+    },
+}
 
 _RESOLUTION_REVIEW_NEEDED = {
     RepositoryQueryResolution.AMBIGUOUS_RETRIEVAL,
@@ -781,3 +804,131 @@ def verify_repository_query_evidence(payload: Mapping[str, Any]) -> bool:
     ):
         return False
     return True
+
+
+def normalize_task_context(raw):
+    gaps = []
+    if raw is None:
+        return TaskAwareQueryContextV1(), gaps
+    if not isinstance(raw, Mapping):
+        return TaskAwareQueryContextV1(), ["task_context must be an object"]
+    role = raw.get("task_role", "general_localization")
+    policy = raw.get("fusion_policy", "rrf_k60_uniform")
+    weights_raw = raw.get("fusion_weights", {})
+    shadow_raw = raw.get("shadow_mode", False)
+    if role not in SUPPORTED_TASK_ROLES:
+        gaps.append("task_role invalid")
+        role = "general_localization"
+    if policy not in SUPPORTED_FUSION_POLICIES:
+        gaps.append("fusion_policy invalid")
+        policy = "rrf_k60_uniform"
+    weights = {}
+    if weights_raw:
+        if not isinstance(weights_raw, Mapping):
+            gaps.append("fusion_weights must be an object")
+        else:
+            for key, value in weights_raw.items():
+                if not isinstance(key, str) or not key.strip():
+                    gaps.append("fusion_weights keys must be non-empty")
+                    continue
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    gaps.append("fusion_weights must be numeric")
+                    continue
+                if value <= 0:
+                    gaps.append("fusion_weights must be positive")
+                    continue
+                weights[key.strip()] = float(value)
+    if policy == "rrf_k60_uniform" and weights:
+        gaps.append("uniform policy must not carry weights")
+        weights = {}
+    if policy == FUSION_POLICY_RRF_K60_WEIGHTED and not weights:
+        weights = dict(DEFAULT_TASK_ROLE_WEIGHTS.get(role, {}))
+    if not isinstance(shadow_raw, bool):
+        gaps.append("shadow_mode must be a boolean")
+        shadow_raw = False
+    try:
+        context = TaskAwareQueryContextV1(
+            task_role=role, fusion_policy=policy,
+            fusion_weights=weights, shadow_mode=bool(shadow_raw))
+    except (TypeError, ValueError) as exc:
+        gaps.append("task_context invalid")
+        context = TaskAwareQueryContextV1()
+    return context, gaps
+
+
+def fuse_candidates_weighted(retrievers, weights=None):
+    if not weights:
+        return _fuse_candidates(retrievers, required_candidates=10**9)
+    source_map = {}
+    per_weight = {}
+    exact = set()
+    for run in retrievers:
+        weight = float(weights.get(run.identity.retriever_id, 1.0))
+        for candidate in run.ranked_candidates:
+            key = candidate.candidate_ref
+            source_map.setdefault(key, []).append(candidate)
+            per_weight.setdefault(key, []).append(weight)
+            if candidate.match_class in EXACT_MATCH_CLASSES:
+                exact.add(key)
+    fused = []
+    for ref, entries in source_map.items():
+        eweights = per_weight[ref]
+        score = sum(w / (FUSION_K + e.source_rank) for e, w in zip(entries, eweights))
+        per_source = tuple(sorted(entries, key=lambda e: (e.source_rank, e.match_class)))
+        sources = tuple(sorted({run.identity.retriever_id for run in retrievers for c in run.ranked_candidates if c.candidate_ref == ref}))
+        fused.append(FusedCandidateV1(candidate_ref=ref, fused_rank=0, fused_score=round(score, 6), exact_match=ref in exact, per_source_refs=per_source, matched_sources=sources, matched_source_count=len(sources)))
+    fused.sort(key=lambda c: (-c.fused_score, c.candidate_ref))
+    return [replace(c, fused_rank=i) for i, c in enumerate(fused, start=1)]
+
+
+def _hash_task_report(payload):
+    unsigned = dict(payload)
+    unsigned.pop("content_sha256", None)
+    canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def analyze_task_aware_query(data):
+    if not isinstance(data, Mapping):
+        raise TypeError("task-aware query input must be a mapping")
+    context, context_gaps = normalize_task_context(data.get("task_context"))
+    base_input = {k: v for k, v in data.items() if k != "task_context"}
+    base = analyze_repository_query(base_input)
+    payload = base.to_dict()
+    weighted_order = []
+    if context.fusion_policy == FUSION_POLICY_RRF_K60_WEIGHTED:
+        full = fuse_candidates_weighted(base.retrievers, weights=dict(context.fusion_weights))
+        weighted_order = [c.candidate_ref for c in full[: base.required_candidates]]
+    per_source = {}
+    for run in base.retrievers:
+        per_source[run.identity.retriever_id] = len(run.ranked_candidates)
+    declared = {run.identity.retriever_id for run in base.retrievers}
+    expected_sources = set(context.fusion_weights) if context.fusion_weights else set()
+    missing = sorted(expected_sources - declared)
+    reduction = {"distinct_candidates": base.distinct_candidate_count, "fused_emitted": len(base.fused_candidates), "required_candidates": base.required_candidates}
+    gaps = list(base.evidence_gaps) + context_gaps
+    if context.task_role == TASK_ROLE_TEST_SELECTION and not context.shadow_mode:
+        gaps = gaps + ["test_selection requires shadow_mode until bounded pilot completes"]
+    report_payload = dict(payload)
+    report_payload["evidence_gaps"] = gaps
+    if weighted_order:
+        report_payload["weighted_fusion_order"] = weighted_order
+    report = TaskAwareQueryReportV1(query_report=report_payload, task_context=context, per_source_contribution=per_source, missing_sources=tuple(missing), candidate_reduction=reduction, content_sha256="", schema=TASK_AWARE_SCHEMA_V1, claim_ceiling=TASK_AWARE_QUERY_CLAIM_CEILING)
+    return replace(report, content_sha256=_hash_task_report(report.to_dict()))
+
+
+def verify_task_aware_query_evidence(payload):
+    if not isinstance(payload, Mapping):
+        return False
+    if payload.get("schema") != TASK_AWARE_SCHEMA_V1:
+        return False
+    if payload.get("claim_ceiling") != TASK_AWARE_QUERY_CLAIM_CEILING:
+        return False
+    report = payload.get("query_report")
+    if not isinstance(report, Mapping):
+        return False
+    if not verify_repository_query_evidence(report):
+        return False
+    unsigned = dict(payload)
+    unsigned.pop("content_sha256", None)
+    return _hash_task_report(unsigned) == payload.get("content_sha256")

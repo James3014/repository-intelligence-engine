@@ -16,6 +16,26 @@ CLAIM_CEILING = "PR_INTELLIGENCE_ONLY"
 CI_EVIDENCE_CLAIM_CEILING = "CI_EVIDENCE_ONLY"
 REPOSITORY_FACTS_CLAIM_CEILING = "REPOSITORY_FACTS_ONLY"
 REPOSITORY_QUERY_CLAIM_CEILING = "REPOSITORY_QUERY_EVIDENCE_ONLY"
+TASK_AWARE_QUERY_CLAIM_CEILING = "TASK_AWARE_REPOSITORY_QUERY_EVIDENCE_SHADOW_ONLY"
+
+TASK_AWARE_SCHEMA_V1 = "reviewer.task_aware_repository_query_evidence.v1"
+
+# Task-role vocabulary for the #31 follow-up. Roles are caller-declared
+# retrieval intents only: they select fusion-policy defaults and benchmark
+# reporting shape, never routing/worker/acceptance authority.
+TASK_ROLE_GENERAL_LOCALIZATION = "general_localization"
+TASK_ROLE_TEST_SELECTION = "test_selection"
+SUPPORTED_TASK_ROLES = frozenset({TASK_ROLE_GENERAL_LOCALIZATION, TASK_ROLE_TEST_SELECTION})
+
+# Fusion-policy identity vocabulary: caller-provided rank sources fused by
+# deterministic RRF. Weights are explicit and hash-bound; unknown policies
+# fail closed. "rrf_k60_uniform" preserves exact #29 behavior.
+FUSION_POLICY_RRF_K60_UNIFORM = "rrf_k60_uniform"
+FUSION_POLICY_RRF_K60_WEIGHTED = "rrf_k60_weighted"
+SUPPORTED_FUSION_POLICIES = frozenset({
+    FUSION_POLICY_RRF_K60_UNIFORM,
+    FUSION_POLICY_RRF_K60_WEIGHTED,
+})
 
 
 class EvidenceCompleteness(str, Enum):
@@ -505,6 +525,135 @@ class RepositoryQueryEvidenceReportV1:
             "distinct_candidate_count": self.distinct_candidate_count,
             "exact_match_count": self.exact_match_count,
             "semantic_review_needed": self.semantic_review_needed,
+            "claim_ceiling": self.claim_ceiling,
+            "content_sha256": self.content_sha256,
+        }
+
+
+@dataclass(frozen=True)
+class TaskAwareQueryContextV1:
+    """Caller-declared task-role + fusion-policy identity for #31 follow-up.
+
+    Advisory only: selects fusion defaults and benchmark reporting shape.
+    Never grants routing, worker, merge, release, or acceptance authority.
+    """
+
+    task_role: str = TASK_ROLE_GENERAL_LOCALIZATION
+    fusion_policy: str = FUSION_POLICY_RRF_K60_UNIFORM
+    fusion_weights: Mapping[str, float] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    shadow_mode: bool = False
+
+    def __post_init__(self) -> None:
+        if self.task_role not in SUPPORTED_TASK_ROLES:
+            raise ValueError(f"task_role must be one of {sorted(SUPPORTED_TASK_ROLES)}")
+        if self.fusion_policy not in SUPPORTED_FUSION_POLICIES:
+            raise ValueError(
+                f"fusion_policy must be one of {sorted(SUPPORTED_FUSION_POLICIES)}"
+            )
+        if isinstance(self.fusion_weights, Mapping):
+            frozen = MappingProxyType({
+                str(k): float(v) for k, v in self.fusion_weights.items()
+            })
+        else:
+            frozen = MappingProxyType({})
+        object.__setattr__(self, "fusion_weights", frozen)
+        for key, weight in self.fusion_weights.items():
+            if not key or not key.strip():
+                raise ValueError("fusion_weights keys must be non-empty retriever ids")
+            if not isinstance(weight, float) or weight <= 0:
+                raise ValueError("fusion_weights values must be positive floats")
+        if self.fusion_policy == FUSION_POLICY_RRF_K60_UNIFORM and self.fusion_weights:
+            raise ValueError("uniform fusion policy must not carry fusion_weights")
+        if self.fusion_policy == FUSION_POLICY_RRF_K60_WEIGHTED and not self.fusion_weights:
+            raise ValueError("weighted fusion policy requires fusion_weights")
+        if type(self.shadow_mode) is not bool:
+            raise TypeError("shadow_mode must be a bool")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "task_role": self.task_role,
+            "fusion_policy": self.fusion_policy,
+            "fusion_weights": {k: v for k, v in sorted(self.fusion_weights.items())},
+            "shadow_mode": self.shadow_mode,
+        }
+
+
+@dataclass(frozen=True)
+class TaskAwareQueryReportV1:
+    """Hash-bound task-aware advisory wrapper over a query evidence report.
+
+    Preserves the full #29 report payload, binds task_role/fusion-policy
+    identity, records per-source contribution/missingness, and keeps the
+    output explicitly additive: Top-K incompleteness stays representable
+    and empty/low-score retrieval is never proof of absence.
+    """
+
+    query_report: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+    task_context: TaskAwareQueryContextV1 = TaskAwareQueryContextV1()  # type: ignore[assignment]
+    per_source_contribution: Mapping[str, int] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    missing_sources: tuple[str, ...] = ()
+    additive_note: str = "ADVISORY_ADDITIVE_TOP_K_INCOMPLETE"
+    candidate_reduction: Mapping[str, int] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    content_sha256: str = ""
+    schema: str = TASK_AWARE_SCHEMA_V1
+    claim_ceiling: str = TASK_AWARE_QUERY_CLAIM_CEILING
+
+    def __post_init__(self) -> None:
+        if isinstance(self.query_report, Mapping):
+            object.__setattr__(
+                self, "query_report", MappingProxyType(dict(self.query_report))
+            )
+        else:
+            object.__setattr__(self, "query_report", MappingProxyType({}))
+        if type(self.task_context) is not TaskAwareQueryContextV1:
+            raise TypeError("task_context must be TaskAwareQueryContextV1")
+        if isinstance(self.per_source_contribution, Mapping):
+            frozen = MappingProxyType({
+                str(k): int(v) for k, v in self.per_source_contribution.items()
+            })
+        else:
+            frozen = MappingProxyType({})
+        object.__setattr__(self, "per_source_contribution", frozen)
+        for key, value in self.per_source_contribution.items():
+            if not key or not key.strip():
+                raise ValueError("per_source_contribution keys must be non-empty")
+            if not isinstance(value, int) or value < 0:
+                raise ValueError("per_source_contribution values must be non-negative ints")
+        object.__setattr__(self, "missing_sources", tuple(self.missing_sources))
+        for source in self.missing_sources:
+            if not isinstance(source, str) or not source.strip():
+                raise ValueError("missing_sources must contain non-empty strings")
+        if (
+            not isinstance(self.additive_note, str) or not self.additive_note.strip()
+        ):
+            raise ValueError("additive_note must be a non-empty string")
+        if isinstance(self.candidate_reduction, Mapping):
+            frozen_red = MappingProxyType({
+                str(k): int(v) for k, v in self.candidate_reduction.items()
+            })
+        else:
+            frozen_red = MappingProxyType({})
+        object.__setattr__(self, "candidate_reduction", frozen_red)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": self.schema,
+            "task_context": self.task_context.to_dict(),
+            "query_report": dict(self.query_report),
+            "per_source_contribution": {
+                k: v for k, v in sorted(self.per_source_contribution.items())
+            },
+            "missing_sources": list(self.missing_sources),
+            "additive_note": self.additive_note,
+            "candidate_reduction": {
+                k: v for k, v in sorted(self.candidate_reduction.items())
+            },
             "claim_ceiling": self.claim_ceiling,
             "content_sha256": self.content_sha256,
         }
