@@ -40,6 +40,15 @@ from .contracts import (
     RevisionIdentity,
     StructuredFactsReportV1,
 )
+from .check_roles import (
+    ADVISORY_CHECK,
+    CHECK_ROLE_CLAIM_CEILING,
+    CHECK_ROLE_SCHEMA,
+    REQUIRED_GATE,
+    UNKNOWN_POLICY_ROLE,
+    classify_check_roles,
+    verify_check_role_report,
+)
 from .facts import analyze_structured_facts, verify_structured_facts_report
 from .impact import analyze_change_impact, verify_change_impact_report
 from .cfi import analyze_ci_failure_intelligence, verify_ci_failure_intelligence_report
@@ -106,4 +115,11 @@ __all__ = [
     "verify_repository_query_evidence",
     "build_repository_intelligence_report",
     "verify_repository_intelligence_report",
+    "CHECK_ROLE_SCHEMA",
+    "CHECK_ROLE_CLAIM_CEILING",
+    "REQUIRED_GATE",
+    "ADVISORY_CHECK",
+    "UNKNOWN_POLICY_ROLE",
+    "classify_check_roles",
+    "verify_check_role_report",
 ]
