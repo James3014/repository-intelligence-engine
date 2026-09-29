@@ -5,6 +5,7 @@ PR intelligence is bounded by PR_INTELLIGENCE_ONLY; CI evidence is bounded by CI
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
@@ -552,6 +553,13 @@ class TaskAwareQueryContextV1:
             raise ValueError(
                 f"fusion_policy must be one of {sorted(SUPPORTED_FUSION_POLICIES)}"
             )
+        if not isinstance(self.fusion_weights, Mapping):
+            raise TypeError("fusion_weights must be a mapping")
+        for key, value in self.fusion_weights.items():
+            if not isinstance(key, str) or not key.strip() or key != key.strip():
+                raise ValueError("fusion_weights keys must be normalized retriever ids")
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError("fusion_weights must be finite positive numbers")
         if isinstance(self.fusion_weights, Mapping):
             frozen = MappingProxyType({
                 str(k): float(v) for k, v in self.fusion_weights.items()
@@ -596,6 +604,8 @@ class TaskAwareQueryReportV1:
         default_factory=lambda: MappingProxyType({})
     )
     missing_sources: tuple[str, ...] = ()
+    evidence_gaps: tuple[str, ...] = ()
+    weighted_fusion_order: tuple[str, ...] = ()
     additive_note: str = "ADVISORY_ADDITIVE_TOP_K_INCOMPLETE"
     candidate_reduction: Mapping[str, int] = field(
         default_factory=lambda: MappingProxyType({})
@@ -650,6 +660,8 @@ class TaskAwareQueryReportV1:
                 k: v for k, v in sorted(self.per_source_contribution.items())
             },
             "missing_sources": list(self.missing_sources),
+            "evidence_gaps": list(self.evidence_gaps),
+            "weighted_fusion_order": list(self.weighted_fusion_order),
             "additive_note": self.additive_note,
             "candidate_reduction": {
                 k: v for k, v in sorted(self.candidate_reduction.items())

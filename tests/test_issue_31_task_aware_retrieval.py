@@ -59,7 +59,8 @@ def test_weighted_policy_emits_deterministic_order():
     first = analyze_task_aware_query(_base(ctx))
     second = analyze_task_aware_query(_base(ctx))
     assert first.to_dict() == second.to_dict()
-    assert "weighted_fusion_order" in first.query_report
+    assert first.weighted_fusion_order
+    assert verify_task_aware_query_evidence(first.to_dict())
     assert first.per_source_contribution == {"path_lexical": 2, "content_bm25": 2,
                                              "history_cochange": 2}
     assert first.missing_sources == ()
@@ -83,11 +84,11 @@ def test_invalid_task_role_fails_closed_to_default():
 def test_test_selection_requires_shadow_mode():
     wrapped = analyze_task_aware_query(
         _base({"task_role": "test_selection", "shadow_mode": False}))
-    assert any("shadow_mode" in g for g in wrapped.query_report["evidence_gaps"])
+    assert any("shadow_mode" in g for g in wrapped.evidence_gaps)
     shadowed = analyze_task_aware_query(
         _base({"task_role": "test_selection", "shadow_mode": True}))
     assert not any("shadow_mode" in g
-                   for g in shadowed.query_report["evidence_gaps"]
+                   for g in shadowed.evidence_gaps
                    if "requires shadow_mode" in g)
 
 
@@ -121,6 +122,6 @@ def test_tampered_wrapper_fails_verification():
 
 def test_no_hard_pruning_claim():
     wrapped = analyze_task_aware_query(_base())
-    assert "prun" not in wrapped.to_dict().__str__().lower() or True
+    assert wrapped.additive_note == "ADVISORY_ADDITIVE_TOP_K_INCOMPLETE"
     assert wrapped.candidate_reduction["distinct_candidates"] >= len(
         wrapped.query_report["fused_candidates"])

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import posixpath
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
@@ -834,7 +835,7 @@ def normalize_task_context(raw):
                 if isinstance(value, bool) or not isinstance(value, (int, float)):
                     gaps.append("fusion_weights must be numeric")
                     continue
-                if value <= 0:
+                if not math.isfinite(value) or value <= 0:
                     gaps.append("fusion_weights must be positive")
                     continue
                 weights[key.strip()] = float(value)
@@ -877,7 +878,7 @@ def fuse_candidates_weighted(retrievers, weights=None):
         per_source = tuple(sorted(entries, key=lambda e: (e.source_rank, e.match_class)))
         sources = tuple(sorted({run.identity.retriever_id for run in retrievers for c in run.ranked_candidates if c.candidate_ref == ref}))
         fused.append(FusedCandidateV1(candidate_ref=ref, fused_rank=0, fused_score=round(score, 6), exact_match=ref in exact, per_source_refs=per_source, matched_sources=sources, matched_source_count=len(sources)))
-    fused.sort(key=lambda c: (-c.fused_score, c.candidate_ref))
+    fused.sort(key=lambda c: (not c.exact_match, -c.fused_score, c.candidate_ref))
     return [replace(c, fused_rank=i) for i, c in enumerate(fused, start=1)]
 
 
@@ -898,7 +899,8 @@ def analyze_task_aware_query(data):
     weighted_order = []
     if context.fusion_policy == FUSION_POLICY_RRF_K60_WEIGHTED:
         full = fuse_candidates_weighted(base.retrievers, weights=dict(context.fusion_weights))
-        weighted_order = [c.candidate_ref for c in full[: base.required_candidates]]
+        limit = max(base.required_candidates, sum(c.exact_match for c in full))
+        weighted_order = [c.candidate_ref for c in full[:limit]]
     per_source = {}
     for run in base.retrievers:
         per_source[run.identity.retriever_id] = len(run.ranked_candidates)
@@ -909,11 +911,7 @@ def analyze_task_aware_query(data):
     gaps = list(base.evidence_gaps) + context_gaps
     if context.task_role == TASK_ROLE_TEST_SELECTION and not context.shadow_mode:
         gaps = gaps + ["test_selection requires shadow_mode until bounded pilot completes"]
-    report_payload = dict(payload)
-    report_payload["evidence_gaps"] = gaps
-    if weighted_order:
-        report_payload["weighted_fusion_order"] = weighted_order
-    report = TaskAwareQueryReportV1(query_report=report_payload, task_context=context, per_source_contribution=per_source, missing_sources=tuple(missing), candidate_reduction=reduction, content_sha256="", schema=TASK_AWARE_SCHEMA_V1, claim_ceiling=TASK_AWARE_QUERY_CLAIM_CEILING)
+    report = TaskAwareQueryReportV1(query_report=payload, task_context=context, per_source_contribution=per_source, missing_sources=tuple(missing), evidence_gaps=tuple(gaps), weighted_fusion_order=tuple(weighted_order), candidate_reduction=reduction, content_sha256="", schema=TASK_AWARE_SCHEMA_V1, claim_ceiling=TASK_AWARE_QUERY_CLAIM_CEILING)
     return replace(report, content_sha256=_hash_task_report(report.to_dict()))
 
 
@@ -929,6 +927,13 @@ def verify_task_aware_query_evidence(payload):
         return False
     if not verify_repository_query_evidence(report):
         return False
-    unsigned = dict(payload)
-    unsigned.pop("content_sha256", None)
-    return _hash_task_report(unsigned) == payload.get("content_sha256")
+    try:
+        context, gaps = normalize_task_context(payload.get("task_context"))
+        if gaps or context.to_dict() != payload.get("task_context"):
+            return False
+        source = dict(report["source_evidence"])
+        source["task_context"] = context.to_dict()
+        recomputed = analyze_task_aware_query(source).to_dict()
+        return dict(payload) == recomputed
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
