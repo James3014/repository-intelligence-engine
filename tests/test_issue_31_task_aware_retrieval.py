@@ -1,10 +1,7 @@
 """Issue #31: task-aware sparse retrieval + shadow test selection (follow-up to #29)."""
 from __future__ import annotations
-import pytest
-from repository_intelligence.contracts import (
-    TASK_AWARE_QUERY_CLAIM_CEILING,
-    TaskAwareQueryContextV1,
-)
+
+from repository_intelligence.contracts import TASK_AWARE_QUERY_CLAIM_CEILING
 from repository_intelligence.retrieval import (
     analyze_repository_query,
     analyze_task_aware_query,

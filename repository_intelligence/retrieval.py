@@ -850,7 +850,7 @@ def normalize_task_context(raw):
         context = TaskAwareQueryContextV1(
             task_role=role, fusion_policy=policy,
             fusion_weights=weights, shadow_mode=bool(shadow_raw))
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError):
         gaps.append("task_context invalid")
         context = TaskAwareQueryContextV1()
     return context, gaps
