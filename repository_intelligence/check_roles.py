@@ -66,7 +66,20 @@ def classify_check_roles(
 
         status = str(row.get("conclusion") or row.get("status") or "").strip().lower()
         incomplete = status in _INCOMPLETE or not status
-        successful = status in _SUCCESS
+        check_head = row.get("head_sha")
+        identity_bound = (
+            isinstance(check_head, str)
+            and bool(check_head.strip())
+            and check_head == identity["head_sha"]
+        )
+        identity_reason = (
+            "CHECK_HEAD_BOUND"
+            if identity_bound
+            else "CHECK_HEAD_MISSING"
+            if not isinstance(check_head, str) or not check_head.strip()
+            else "CHECK_HEAD_MISMATCH"
+        )
+        successful = status in _SUCCESS and identity_bound
         if role == REQUIRED_GATE and not successful:
             required_blockers.append(name or "<unnamed>")
         elif role == ADVISORY_CHECK and not successful:
@@ -79,11 +92,16 @@ def classify_check_roles(
                 "name": name,
                 "role": role,
                 "status": status,
+                "head_sha": check_head if isinstance(check_head, str) else None,
+                "identity_bound": identity_bound,
+                "identity_reason": identity_reason,
                 "terminal": not incomplete,
                 "successful": successful,
                 "observer_state": (
                     "ADVISORY_INCOMPLETE"
                     if role == ADVISORY_CHECK and incomplete
+                    else "ADVISORY_IDENTITY_UNBOUND"
+                    if role == ADVISORY_CHECK and not identity_bound
                     else "ADVISORY_FAILED"
                     if role == ADVISORY_CHECK and not successful
                     else "OK"

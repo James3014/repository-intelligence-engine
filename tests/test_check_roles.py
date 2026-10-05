@@ -24,8 +24,8 @@ def test_required_failure_blocks_but_advisory_failure_only_degrades():
     report = classify_check_roles(
         review_identity=IDENTITY,
         checks=[
-            {"name": "tests", "conclusion": "failure"},
-            {"name": "observer", "conclusion": "failure"},
+            {"name": "tests", "conclusion": "failure", "head_sha": "head"},
+            {"name": "observer", "conclusion": "failure", "head_sha": "head"},
         ],
         policy_roles={"tests": REQUIRED_GATE, "observer": ADVISORY_CHECK},
         previous_check_names=("tests", "observer"),
@@ -39,7 +39,7 @@ def test_required_failure_blocks_but_advisory_failure_only_degrades():
 def test_advisory_timeout_is_incomplete_not_product_failure():
     report = classify_check_roles(
         review_identity=IDENTITY,
-        checks=[{"name": "observer", "status": "timeout"}],
+        checks=[{"name": "observer", "status": "timeout", "head_sha": "head"}],
         policy_roles={"observer": ADVISORY_CHECK},
         previous_check_names=("observer",),
     )
@@ -51,7 +51,7 @@ def test_advisory_timeout_is_incomplete_not_product_failure():
 def test_missing_policy_role_is_explicit_unknown():
     report = classify_check_roles(
         review_identity=IDENTITY,
-        checks=[{"name": "mystery", "conclusion": "success"}],
+        checks=[{"name": "mystery", "conclusion": "success", "head_sha": "head"}],
         policy_roles={},
     )
     assert report["checks"][0]["role"] == UNKNOWN_POLICY_ROLE
@@ -62,8 +62,8 @@ def test_duplicate_names_fail_closed_to_unknown_role():
     report = classify_check_roles(
         review_identity=IDENTITY,
         checks=[
-            {"name": "tests", "conclusion": "success"},
-            {"name": "tests", "conclusion": "failure"},
+            {"name": "tests", "conclusion": "success", "head_sha": "head"},
+            {"name": "tests", "conclusion": "failure", "head_sha": "head"},
         ],
         policy_roles={"tests": REQUIRED_GATE},
     )
@@ -75,8 +75,8 @@ def test_check_set_change_is_explicitly_advisory_incomplete():
     report = classify_check_roles(
         review_identity=IDENTITY,
         checks=[
-            {"name": "tests", "conclusion": "success"},
-            {"name": "observer", "conclusion": "success"},
+            {"name": "tests", "conclusion": "success", "head_sha": "head"},
+            {"name": "observer", "conclusion": "success", "head_sha": "head"},
         ],
         policy_roles={"tests": REQUIRED_GATE, "observer": ADVISORY_CHECK},
         previous_check_names=("tests",),
@@ -89,14 +89,14 @@ def test_check_set_change_is_explicitly_advisory_incomplete():
 def test_check_set_changes_change_content_hash_without_changing_identity():
     one = classify_check_roles(
         review_identity=IDENTITY,
-        checks=[{"name": "tests", "conclusion": "success"}],
+        checks=[{"name": "tests", "conclusion": "success", "head_sha": "head"}],
         policy_roles={"tests": REQUIRED_GATE},
     )
     two = classify_check_roles(
         review_identity=IDENTITY,
         checks=[
-            {"name": "tests", "conclusion": "success"},
-            {"name": "observer", "conclusion": "success"},
+            {"name": "tests", "conclusion": "success", "head_sha": "head"},
+            {"name": "observer", "conclusion": "success", "head_sha": "head"},
         ],
         policy_roles={"tests": REQUIRED_GATE, "observer": ADVISORY_CHECK},
     )
@@ -104,13 +104,29 @@ def test_check_set_changes_change_content_hash_without_changing_identity():
     assert one["content_sha256"] != two["content_sha256"]
 
 
+def test_stale_or_missing_check_head_fails_closed():
+    for check in (
+        {"name": "tests", "conclusion": "success", "head_sha": "old-head"},
+        {"name": "tests", "conclusion": "success"},
+    ):
+        report = classify_check_roles(
+            review_identity=IDENTITY,
+            checks=[check],
+            policy_roles={"tests": REQUIRED_GATE},
+            previous_check_names=("tests",),
+        )
+        assert report["required_gate_state"] == "BLOCKED"
+        assert report["required_blockers"] == ["tests"]
+        assert report["checks"][0]["identity_bound"] is False
+
+
 def test_report_verifier_rejects_tamper():
     policy = {"tests": REQUIRED_GATE, "observer": ADVISORY_CHECK}
     report = classify_check_roles(
         review_identity=IDENTITY,
         checks=[
-            {"name": "tests", "conclusion": "success"},
-            {"name": "observer", "status": "timeout"},
+            {"name": "tests", "conclusion": "success", "head_sha": "head"},
+            {"name": "observer", "status": "timeout", "head_sha": "head"},
         ],
         policy_roles=policy,
         previous_check_names=("tests", "observer"),
