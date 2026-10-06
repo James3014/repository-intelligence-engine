@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -444,3 +446,141 @@ def test_documented_status_url_shapes_bind_to_requested_head(api_url, status_url
     assert snapshot["collection_complete"] is True
     assert snapshot["checks"][1]["external_id"] == "github_commit_status:412"
     assert snapshot["checks"][1]["head_sha"] == "b" * 40
+
+class _FakeHTTPResponse:
+    def __init__(self, payload: object):
+        self.raw = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self, _limit: int) -> bytes:
+        return self.raw
+
+
+def _http_error(
+    *,
+    body: str,
+    headers: dict[str, str] | None = None,
+) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        "https://api.github.com/repos/owner/repo",
+        403,
+        "Forbidden",
+        headers or {},
+        io.BytesIO(body.encode("utf-8")),
+    )
+
+
+def test_github_read_client_retries_installation_rate_limit_and_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_urlopen(_request, timeout):
+        nonlocal calls
+        assert timeout == 20.0
+        calls += 1
+        if calls == 1:
+            raise _http_error(
+                body='{"message":"API rate limit exceeded for installation"}',
+                headers={"X-RateLimit-Remaining": "0", "Retry-After": "0"},
+            )
+        return _FakeHTTPResponse({"ok": True})
+
+    monkeypatch.setattr(gha.urllib.request, "urlopen", fake_urlopen)
+    client = gha.GitHubReadClient(
+        "token",
+        rate_limit_retries=2,
+        rate_limit_max_wait=5.0,
+        sleep_fn=sleeps.append,
+        clock_fn=lambda: 1000.0,
+    )
+
+    assert client.get_json("/repos/owner/repo") == {"ok": True}
+    assert calls == 2
+    assert sleeps == [0.0]
+    assert '"status": "RATE_LIMIT_RETRYING"' in capsys.readouterr().err
+
+
+def test_github_read_client_uses_rate_limit_reset_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_urlopen(_request, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise _http_error(
+                body='{"message":"API rate limit exceeded for installation"}',
+                headers={
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": "1002",
+                },
+            )
+        return _FakeHTTPResponse({"ok": True})
+
+    monkeypatch.setattr(gha.urllib.request, "urlopen", fake_urlopen)
+    client = gha.GitHubReadClient(
+        "token",
+        rate_limit_retries=1,
+        rate_limit_max_wait=5.0,
+        sleep_fn=sleeps.append,
+        clock_fn=lambda: 1000.0,
+    )
+
+    assert client.get_json("/repos/owner/repo") == {"ok": True}
+    assert sleeps == [3.0]
+
+
+def test_github_read_client_does_not_retry_permission_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+
+    def fake_urlopen(_request, timeout):
+        raise _http_error(
+            body='{"message":"Resource not accessible by integration"}',
+            headers={"X-RateLimit-Remaining": "4999"},
+        )
+
+    monkeypatch.setattr(gha.urllib.request, "urlopen", fake_urlopen)
+    client = gha.GitHubReadClient("token", sleep_fn=sleeps.append)
+
+    with pytest.raises(RuntimeError, match="GitHub HTTP 403"):
+        client.get_json("/repos/owner/repo")
+    assert sleeps == []
+
+
+def test_github_read_client_fails_closed_when_rate_limit_wait_exceeds_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+
+    def fake_urlopen(_request, timeout):
+        raise _http_error(
+            body='{"message":"API rate limit exceeded for installation"}',
+            headers={"X-RateLimit-Remaining": "0", "Retry-After": "120"},
+        )
+
+    monkeypatch.setattr(gha.urllib.request, "urlopen", fake_urlopen)
+    client = gha.GitHubReadClient(
+        "token",
+        rate_limit_retries=2,
+        rate_limit_max_wait=10.0,
+        sleep_fn=sleeps.append,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"RATE_LIMIT_EXHAUSTED: retry_after_seconds=120\.000",
+    ):
+        client.get_json("/repos/owner/repo")
+    assert sleeps == []

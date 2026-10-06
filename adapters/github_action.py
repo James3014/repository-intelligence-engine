@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,6 +32,9 @@ CLOUD_SCHEMA = "reviewer.repository_intelligence_cloud.v1"
 CLOUD_CLAIM_CEILING = "ADVISORY_EVIDENCE_ONLY"
 DEFAULT_API_URL = "https://api.github.com"
 DEFAULT_MAX_PAGES = 50
+DEFAULT_RATE_LIMIT_RETRIES = 2
+DEFAULT_RATE_LIMIT_MAX_WAIT_SECONDS = 60.0
+DEFAULT_RATE_LIMIT_FALLBACK_WAIT_SECONDS = 1.0
 
 
 class GitHubReadAPI(Protocol):
@@ -38,38 +42,122 @@ class GitHubReadAPI(Protocol):
 
 
 class GitHubReadClient:
-    def __init__(self, token: str, *, api_url: str = DEFAULT_API_URL, timeout: float = 20.0):
+    def __init__(
+        self,
+        token: str,
+        *,
+        api_url: str = DEFAULT_API_URL,
+        timeout: float = 20.0,
+        rate_limit_retries: int = DEFAULT_RATE_LIMIT_RETRIES,
+        rate_limit_max_wait: float = DEFAULT_RATE_LIMIT_MAX_WAIT_SECONDS,
+        sleep_fn: Any | None = None,
+        clock_fn: Any | None = None,
+    ):
         if not token:
             raise ValueError("GITHUB_TOKEN is required")
         if not api_url.startswith("https://"):
             raise ValueError("GitHub API URL must use https")
+        if rate_limit_retries < 0:
+            raise ValueError("rate_limit_retries must be non-negative")
+        if rate_limit_max_wait < 0:
+            raise ValueError("rate_limit_max_wait must be non-negative")
         self.token = token
         self.api_url = api_url.rstrip("/")
         self.timeout = timeout
+        self.rate_limit_retries = rate_limit_retries
+        self.rate_limit_max_wait = rate_limit_max_wait
+        self._sleep = sleep_fn or time.sleep
+        self._clock = clock_fn or time.time
+
+    def _rate_limit_retry_delay(
+        self,
+        exc: urllib.error.HTTPError,
+        detail: str,
+    ) -> float | None:
+        if exc.code != 403:
+            return None
+        headers = exc.headers or {}
+        text = detail.casefold()
+        remaining = str(headers.get("X-RateLimit-Remaining") or "").strip()
+        rate_limited = (
+            remaining == "0"
+            or "rate limit exceeded" in text
+            or "secondary rate limit" in text
+        )
+        if not rate_limited:
+            return None
+
+        retry_after = str(headers.get("Retry-After") or "").strip()
+        if retry_after:
+            try:
+                value = float(retry_after)
+                if value >= 0:
+                    return value
+            except ValueError:
+                pass
+
+        reset = str(headers.get("X-RateLimit-Reset") or "").strip()
+        if reset:
+            try:
+                return max(0.0, float(reset) - float(self._clock()) + 1.0)
+            except (TypeError, ValueError):
+                pass
+        return DEFAULT_RATE_LIMIT_FALLBACK_WAIT_SECONDS
 
     def get_json(self, path: str, params: Mapping[str, Any] | None = None) -> Any:
         if not isinstance(path, str) or not path.startswith("/") or path.startswith("//"):
             raise ValueError("GitHub API path must be absolute and host-relative")
         query = urllib.parse.urlencode(params or {})
         url = f"{self.api_url}{path}{'?' + query if query else ''}"
-        request = urllib.request.Request(
-            url,
-            method="GET",
-            headers={
-                "Authorization": f"Bearer {self.token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-                "User-Agent": "repository-intelligence-action",
-            },
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                raw = response.read(4 * 1024 * 1024 + 1)
-        except urllib.error.HTTPError as exc:
-            detail = exc.read(8192).decode("utf-8", errors="replace").strip()
-            raise RuntimeError(f"GitHub HTTP {exc.code}: {detail or exc.reason}") from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise RuntimeError(f"GitHub read failed: {exc}") from exc
+        raw: bytes | None = None
+        for attempt in range(self.rate_limit_retries + 1):
+            request = urllib.request.Request(
+                url,
+                method="GET",
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                    "User-Agent": "repository-intelligence-action",
+                },
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    raw = response.read(4 * 1024 * 1024 + 1)
+                break
+            except urllib.error.HTTPError as exc:
+                detail = exc.read(8192).decode("utf-8", errors="replace").strip()
+                retry_delay = self._rate_limit_retry_delay(exc, detail)
+                if retry_delay is None:
+                    raise RuntimeError(
+                        f"GitHub HTTP {exc.code}: {detail or exc.reason}"
+                    ) from exc
+                if (
+                    attempt >= self.rate_limit_retries
+                    or retry_delay > self.rate_limit_max_wait
+                ):
+                    raise RuntimeError(
+                        "RATE_LIMIT_EXHAUSTED: "
+                        f"retry_after_seconds={retry_delay:.3f}; "
+                        f"GitHub HTTP {exc.code}: {detail or exc.reason}"
+                    ) from exc
+                print(
+                    json.dumps(
+                        {
+                            "status": "RATE_LIMIT_RETRYING",
+                            "attempt": attempt + 1,
+                            "max_retries": self.rate_limit_retries,
+                            "wait_seconds": retry_delay,
+                        },
+                        sort_keys=True,
+                    ),
+                    file=sys.stderr,
+                )
+                self._sleep(retry_delay)
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                raise RuntimeError(f"GitHub read failed: {exc}") from exc
+        if raw is None:
+            raise RuntimeError("GitHub read failed without a response")
         if len(raw) > 4 * 1024 * 1024:
             raise RuntimeError("GitHub response exceeded 4 MiB bound")
         try:
