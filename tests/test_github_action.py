@@ -584,3 +584,92 @@ def test_github_read_client_fails_closed_when_rate_limit_wait_exceeds_budget(
     ):
         client.get_json("/repos/owner/repo")
     assert sleeps == []
+
+
+def test_unavailable_bundle_is_hash_bound_and_identity_conservative():
+    bundle = gha.run_unavailable_bundle("owner/repo", 7)
+
+    assert bundle["schema"] == "reviewer.repository_intelligence_unavailable.v1"
+    assert bundle["status"] == "UNAVAILABLE"
+    assert bundle["reason"] == "RATE_LIMIT_EXHAUSTED"
+    assert bundle["claim_ceiling"] == "ADVISORY_EVIDENCE_ONLY"
+    assert bundle["readiness"] == "INSUFFICIENT_EVIDENCE"
+    assert bundle["cfi_status"] == "INSUFFICIENT_EVIDENCE"
+    assert bundle["eia_decision"] == "BLOCKED"
+    assert "head_sha" not in bundle
+    assert "base_sha" not in bundle
+    assert "current_main_sha" not in bundle
+    assert "review_identity" not in bundle
+    assert gha.verify_unavailable_bundle(bundle) is True
+
+    tampered = copy.deepcopy(bundle)
+    tampered["repository"] = "other/repo"
+    assert gha.verify_unavailable_bundle(tampered) is False
+
+
+def test_main_rate_limit_exhaustion_writes_unavailable_report_and_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RateLimitedClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_json(self, path, params=None):
+            raise RuntimeError(
+                "RATE_LIMIT_EXHAUSTED: retry_after_seconds=395.218; GitHub HTTP 403"
+            )
+
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"pull_request": {"number": 7}}), encoding="utf-8")
+    summary = tmp_path / "summary.md"
+    outputs = tmp_path / "outputs.txt"
+    report = tmp_path / "ri.json"
+
+    monkeypatch.setattr(gha, "GitHubReadClient", RateLimitedClient)
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(outputs))
+
+    code = gha.main(["--output", str(report)])
+
+    assert code == 0
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert gha.verify_unavailable_bundle(payload) is True
+    assert payload["repository"] == "owner/repo"
+    assert payload["pr_number"] == 7
+    assert "review_identity" not in payload
+    assert "No review identity" in summary.read_text(encoding="utf-8")
+    output_text = outputs.read_text(encoding="utf-8")
+    assert "readiness=INSUFFICIENT_EVIDENCE" in output_text
+    assert "cfi-status=INSUFFICIENT_EVIDENCE" in output_text
+    assert "eia-decision=BLOCKED" in output_text
+    assert "claim-ceiling=ADVISORY_EVIDENCE_ONLY" in output_text
+
+
+def test_main_non_rate_limit_runtime_error_still_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_json(self, path, params=None):
+            raise RuntimeError("GitHub HTTP 403: Resource not accessible by integration")
+
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"pull_request": {"number": 7}}), encoding="utf-8")
+    report = tmp_path / "ri.json"
+
+    monkeypatch.setattr(gha, "GitHubReadClient", BrokenClient)
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event))
+
+    code = gha.main(["--output", str(report)])
+
+    assert code == 1
+    assert not report.exists()
