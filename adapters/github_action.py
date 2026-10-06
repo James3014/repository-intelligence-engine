@@ -29,6 +29,7 @@ from repository_intelligence import (
 from repository_intelligence.cli import execute_operation
 
 CLOUD_SCHEMA = "reviewer.repository_intelligence_cloud.v1"
+UNAVAILABLE_SCHEMA = "reviewer.repository_intelligence_unavailable.v1"
 CLOUD_CLAIM_CEILING = "ADVISORY_EVIDENCE_ONLY"
 DEFAULT_API_URL = "https://api.github.com"
 DEFAULT_MAX_PAGES = 50
@@ -456,6 +457,69 @@ def _hash_payload(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+
+def run_unavailable_bundle(
+    repository: str,
+    pr_number: int,
+    *,
+    reason: str = "RATE_LIMIT_EXHAUSTED",
+) -> dict[str, Any]:
+    if not isinstance(pr_number, int) or pr_number <= 0:
+        raise ValueError("pr_number must be a positive integer")
+    bundle: dict[str, Any] = {
+        "schema": UNAVAILABLE_SCHEMA,
+        "status": "UNAVAILABLE",
+        "reason": reason,
+        "claim_ceiling": CLOUD_CLAIM_CEILING,
+        "repository": _validate_repo(repository),
+        "pr_number": pr_number,
+        "readiness": "INSUFFICIENT_EVIDENCE",
+        "cfi_status": "INSUFFICIENT_EVIDENCE",
+        "eia_decision": "BLOCKED",
+        "content_sha256": "",
+    }
+    bundle["content_sha256"] = _hash_payload(bundle)
+    return bundle
+
+
+def verify_unavailable_bundle(payload: Mapping[str, Any]) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    if payload.get("schema") != UNAVAILABLE_SCHEMA:
+        return False
+    if payload.get("status") != "UNAVAILABLE":
+        return False
+    if payload.get("reason") != "RATE_LIMIT_EXHAUSTED":
+        return False
+    if payload.get("claim_ceiling") != CLOUD_CLAIM_CEILING:
+        return False
+    if payload.get("readiness") != "INSUFFICIENT_EVIDENCE":
+        return False
+    if payload.get("cfi_status") != "INSUFFICIENT_EVIDENCE":
+        return False
+    if payload.get("eia_decision") != "BLOCKED":
+        return False
+    repository = payload.get("repository")
+    pr_number = payload.get("pr_number")
+    if not isinstance(repository, str):
+        return False
+    try:
+        _validate_repo(repository)
+    except ValueError:
+        return False
+    if not isinstance(pr_number, int) or pr_number <= 0:
+        return False
+    for forbidden in ("head_sha", "base_sha", "current_main_sha", "review_identity"):
+        if forbidden in payload:
+            return False
+    supplied = payload.get("content_sha256")
+    return (
+        isinstance(supplied, str)
+        and len(supplied) == 64
+        and supplied == _hash_payload(payload)
+    )
+
+
 def run_cloud_bundle(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     """Run canonical deterministic cloud-safe operations over one acquired snapshot."""
     revision = execute_operation("revision", dict(snapshot))
@@ -576,6 +640,44 @@ def _write_step_summary(bundle: Mapping[str, Any], path: str | None) -> None:
         handle.write(text)
 
 
+
+def _write_unavailable_step_summary(bundle: Mapping[str, Any], path: str | None) -> None:
+    if not path:
+        return
+    text = (
+        "## Repository Intelligence unavailable\n\n"
+        f"- Repository: {bundle['repository']}\n"
+        f"- PR: {bundle['pr_number']}\n"
+        f"- Reason: {bundle['reason']}\n"
+        f"- Claim ceiling: {bundle['claim_ceiling']}\n"
+        f"- Bundle SHA-256: {bundle['content_sha256']}\n\n"
+        "No review identity, readiness claim, or CI evidence was acquired. "
+        "Downstream automation remains blocked.\n"
+    )
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(text)
+
+
+def _write_unavailable_github_outputs(
+    bundle: Mapping[str, Any],
+    path: str | None,
+    report_path: str,
+) -> None:
+    if not path:
+        return
+    values = {
+        "report-path": report_path,
+        "content-sha256": bundle["content_sha256"],
+        "readiness": bundle["readiness"],
+        "cfi-status": bundle["cfi_status"],
+        "eia-decision": bundle["eia_decision"],
+        "claim-ceiling": bundle["claim_ceiling"],
+    }
+    with open(path, "a", encoding="utf-8") as handle:
+        for key, value in values.items():
+            handle.write(f"{key}={value}\n")
+
+
 def _write_github_outputs(bundle: Mapping[str, Any], path: str | None, report_path: str) -> None:
     if not path:
         return
@@ -615,12 +717,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         repository = _validate_repo(args.repository)
         pr_number = _resolve_pr_number(args.pr_number, os.environ.get("GITHUB_EVENT_PATH"))
         token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
-        api = GitHubReadClient(token, api_url=os.environ.get("GITHUB_API_URL", DEFAULT_API_URL))
-        snapshot = collect_pr_snapshot(api, repository, pr_number)
-        bundle = run_cloud_bundle(snapshot)
-        if not verify_cloud_bundle(bundle):
-            raise RuntimeError("cloud bundle failed self-verification")
         output = Path(args.output)
+        try:
+            api = GitHubReadClient(token, api_url=os.environ.get("GITHUB_API_URL", DEFAULT_API_URL))
+            snapshot = collect_pr_snapshot(api, repository, pr_number)
+            bundle = run_cloud_bundle(snapshot)
+            if not verify_cloud_bundle(bundle):
+                raise RuntimeError("cloud bundle failed self-verification")
+        except RuntimeError as exc:
+            if not str(exc).startswith("RATE_LIMIT_EXHAUSTED:"):
+                raise
+            bundle = run_unavailable_bundle(repository, pr_number)
+            if not verify_unavailable_bundle(bundle):
+                raise RuntimeError("unavailable bundle failed self-verification") from exc
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(
+                json.dumps(bundle, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            _write_unavailable_step_summary(bundle, os.environ.get("GITHUB_STEP_SUMMARY"))
+            _write_unavailable_github_outputs(
+                bundle,
+                os.environ.get("GITHUB_OUTPUT"),
+                str(output),
+            )
+            print(json.dumps(bundle, sort_keys=True))
+            return 0
+
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         _write_step_summary(bundle, os.environ.get("GITHUB_STEP_SUMMARY"))
