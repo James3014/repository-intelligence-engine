@@ -435,12 +435,10 @@ def analyze_knowledge_applicability(
                 affected_paths.add(path)
                 claimed_paths.add(path)
 
-        if global_unknown:
+        if global_unknown or unknown:
             status = KnowledgeApplicabilityStatus.UNKNOWN
         elif stale:
             status = KnowledgeApplicabilityStatus.STALE_EXACT_SOURCE
-        elif unknown:
-            status = KnowledgeApplicabilityStatus.UNKNOWN
         elif affected_paths:
             status = KnowledgeApplicabilityStatus.AFFECTED_BY_COVERAGE
             reasons.extend(

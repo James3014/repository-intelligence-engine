@@ -324,6 +324,70 @@ def test_null_and_non_string_identities_fail_closed_without_string_coercion():
     assert '"source_path": "None"' not in serialized
 
 
+def test_mixed_hash_mismatch_and_unobserved_exact_source_is_unknown():
+    evidence = _base_evidence()
+    evidence["knowledge_artifacts"] = [
+        {
+            "artifact_id": "mixed",
+            "path": "knowledge/mixed.md",
+            "source_refs": [
+                {
+                    "source_path": "src/stale.py",
+                    "expected_content_sha256": A,
+                },
+                {
+                    "source_path": "src/missing.py",
+                    "expected_content_sha256": C,
+                },
+            ],
+            "covers": [],
+        }
+    ]
+    evidence["changes"] = [{"kind": "MODIFY", "path": "src/stale.py"}]
+    evidence["observed_source_sha256"] = {"src/stale.py": B}
+
+    report = ri.analyze_knowledge_applicability(evidence).to_dict()
+    relation = report["relations"][0]
+
+    assert relation["status"] == "UNKNOWN"
+    assert "SOURCE_HASH_MISMATCH:src/stale.py" in relation["reason_codes"]
+    assert "SOURCE_IDENTITY_UNOBSERVED:src/missing.py" in relation["reason_codes"]
+    assert report["is_complete"] is False
+
+
+def test_mixed_renamed_and_unobserved_exact_source_is_unknown():
+    evidence = _base_evidence()
+    evidence["knowledge_artifacts"] = [
+        {
+            "artifact_id": "mixed-rename",
+            "path": "knowledge/mixed-rename.md",
+            "source_refs": [
+                {
+                    "source_path": "src/old.py",
+                    "expected_content_sha256": A,
+                },
+                {
+                    "source_path": "src/missing.py",
+                    "expected_content_sha256": C,
+                },
+            ],
+            "covers": [],
+        }
+    ]
+    evidence["changes"] = [
+        {"kind": "RENAME", "old_path": "src/old.py", "path": "src/new.py"}
+    ]
+    evidence["observed_source_sha256"] = {"src/new.py": A}
+
+    report = ri.analyze_knowledge_applicability(evidence).to_dict()
+    relation = report["relations"][0]
+
+    assert relation["status"] == "UNKNOWN"
+    assert "SOURCE_REMOVED_OR_RENAMED:src/old.py" in relation["reason_codes"]
+    assert "SOURCE_IDENTITY_UNOBSERVED:src/missing.py" in relation["reason_codes"]
+    assert report["is_complete"] is False
+
+
 def test_malformed_nested_refs_and_changes_fail_closed():
     evidence = _base_evidence()
     evidence["knowledge_artifacts"] = [
