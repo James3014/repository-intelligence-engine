@@ -63,6 +63,14 @@ from .knowledge import (
     analyze_knowledge_applicability,
     verify_knowledge_applicability_report,
 )
+from .guard_delta import (
+    GUARD_SEMANTIC_DELTA_CLAIM_CEILING,
+    GUARD_SEMANTIC_DELTA_SCHEMA,
+    GuardSemanticDeltaClassification,
+    GuardSemanticDeltaReportV1,
+    analyze_guard_semantic_delta,
+    verify_guard_semantic_delta_report,
+)
 from .core import (
     analyze_cross_pr_overlap,
     build_repository_intelligence_report,
@@ -80,6 +88,8 @@ __all__ = [
     "REPOSITORY_QUERY_CLAIM_CEILING",
     "KNOWLEDGE_APPLICABILITY_CLAIM_CEILING",
     "KNOWLEDGE_APPLICABILITY_SCHEMA",
+    "GUARD_SEMANTIC_DELTA_CLAIM_CEILING",
+    "GUARD_SEMANTIC_DELTA_SCHEMA",
     "TERMINAL_FAILURE_STATUSES",
     "SUPPORTED_TERMINAL_FAILURES",
     "is_terminal_failure_status",
@@ -112,6 +122,8 @@ __all__ = [
     "KnowledgeApplicabilityStatus",
     "KnowledgeApplicabilityRelationV1",
     "KnowledgeApplicabilityReportV1",
+    "GuardSemanticDeltaClassification",
+    "GuardSemanticDeltaReportV1",
     "revision_identity",
     "classify_readiness",
     "analyze_cross_pr_overlap",
@@ -129,6 +141,8 @@ __all__ = [
     "verify_repository_query_evidence",
     "analyze_knowledge_applicability",
     "verify_knowledge_applicability_report",
+    "analyze_guard_semantic_delta",
+    "verify_guard_semantic_delta_report",
     "build_repository_intelligence_report",
     "verify_repository_intelligence_report",
     "CHECK_ROLE_SCHEMA",
