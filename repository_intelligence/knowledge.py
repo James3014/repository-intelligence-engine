@@ -129,33 +129,48 @@ def _hash_payload(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _normalise_artifacts(value: Any) -> tuple[dict[str, Any], ...]:
+def _normalise_artifacts(
+    value: Any,
+) -> tuple[tuple[dict[str, Any], ...], tuple[str, ...]]:
+    problems: list[str] = []
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-        return ()
+        return (), ("KNOWLEDGE_ARTIFACTS_INVALID",)
     artifacts: list[dict[str, Any]] = []
-    for raw in value:
+    for index, raw in enumerate(value):
         if not isinstance(raw, Mapping):
+            problems.append(f"KNOWLEDGE_ARTIFACT_INVALID:{index}")
             continue
         refs = raw.get("source_refs", [])
         covers = raw.get("covers", [])
         norm_refs: list[dict[str, str]] = []
-        if isinstance(refs, Sequence) and not isinstance(refs, (str, bytes, bytearray)):
-            for ref in refs:
-                if isinstance(ref, Mapping):
-                    norm_refs.append(
-                        {
-                            "source_path": str(ref.get("source_path", "")),
-                            "expected_content_sha256": str(
-                                ref.get("expected_content_sha256", "")
-                            ).lower(),
-                        }
-                    )
-        norm_covers = (
-            sorted(str(item) for item in covers if isinstance(item, str))
-            if isinstance(covers, Sequence)
-            and not isinstance(covers, (str, bytes, bytearray))
-            else []
-        )
+        if not isinstance(refs, Sequence) or isinstance(refs, (str, bytes, bytearray)):
+            problems.append(f"SOURCE_REFS_INVALID:{index}")
+            refs = []
+        for ref_index, ref in enumerate(refs):
+            if not isinstance(ref, Mapping):
+                problems.append(f"SOURCE_REF_INVALID:{index}:{ref_index}")
+                continue
+            norm_refs.append(
+                {
+                    "source_path": str(ref.get("source_path", "")),
+                    "expected_content_sha256": str(
+                        ref.get("expected_content_sha256", "")
+                    ).lower(),
+                }
+            )
+
+        norm_covers: list[str] = []
+        if not isinstance(covers, Sequence) or isinstance(
+            covers, (str, bytes, bytearray)
+        ):
+            problems.append(f"COVERS_INVALID:{index}")
+            covers = []
+        for cover_index, item in enumerate(covers):
+            if not isinstance(item, str) or not item:
+                problems.append(f"COVER_INVALID:{index}:{cover_index}")
+                continue
+            norm_covers.append(item)
+
         artifacts.append(
             {
                 "artifact_id": str(raw.get("artifact_id", "")),
@@ -167,34 +182,51 @@ def _normalise_artifacts(value: Any) -> tuple[dict[str, Any], ...]:
                         item["expected_content_sha256"],
                     ),
                 ),
-                "covers": norm_covers,
+                "covers": sorted(norm_covers),
             }
         )
-    return tuple(sorted(artifacts, key=lambda item: (item["artifact_id"], item["path"])))
+    return (
+        tuple(sorted(artifacts, key=lambda item: (item["artifact_id"], item["path"]))),
+        tuple(sorted(set(problems))),
+    )
 
 
-def _normalise_changes(value: Any) -> tuple[dict[str, str], ...]:
+def _normalise_changes(
+    value: Any,
+) -> tuple[tuple[dict[str, str], ...], tuple[str, ...]]:
+    problems: list[str] = []
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-        return ()
+        return (), ("CHANGES_INVALID",)
     changes: list[dict[str, str]] = []
-    for raw in value:
+    for index, raw in enumerate(value):
         if not isinstance(raw, Mapping):
+            problems.append(f"CHANGE_INVALID:{index}")
             continue
         kind = str(raw.get("kind", "")).upper()
-        item = {"kind": kind, "path": str(raw.get("path", ""))}
+        path = str(raw.get("path", ""))
+        item = {"kind": kind, "path": path}
         old_path = raw.get("old_path")
         if old_path is not None:
             item["old_path"] = str(old_path)
+        if kind not in {"ADD", "MODIFY", "DELETE", "RENAME"}:
+            problems.append(f"CHANGE_KIND_INVALID:{index}")
+        if kind in {"ADD", "MODIFY", "RENAME"} and not path:
+            problems.append(f"CHANGE_PATH_MISSING:{index}")
+        if kind in {"DELETE", "RENAME"} and not item.get("old_path"):
+            problems.append(f"CHANGE_OLD_PATH_MISSING:{index}")
         changes.append(item)
-    return tuple(
-        sorted(
-            changes,
-            key=lambda item: (
-                item.get("path", ""),
-                item.get("old_path", ""),
-                item.get("kind", ""),
-            ),
-        )
+    return (
+        tuple(
+            sorted(
+                changes,
+                key=lambda item: (
+                    item.get("path", ""),
+                    item.get("old_path", ""),
+                    item.get("kind", ""),
+                ),
+            )
+        ),
+        tuple(sorted(set(problems))),
     )
 
 
@@ -240,32 +272,55 @@ def analyze_knowledge_applicability(
         evidence = {}
 
     identity, identity_ok = _identity_dict(evidence.get("snapshot", {}))
-    artifacts = _normalise_artifacts(evidence.get("knowledge_artifacts", []))
-    changes = _normalise_changes(evidence.get("changes", []))
+    artifacts, artifact_problems = _normalise_artifacts(
+        evidence.get("knowledge_artifacts", [])
+    )
+    changes, change_problems = _normalise_changes(evidence.get("changes", []))
+
+    normalisation_problems: list[str] = [
+        *artifact_problems,
+        *change_problems,
+    ]
     observed_raw = evidence.get("observed_source_sha256", {})
-    observed = (
-        {
-            str(path): str(digest).lower()
-            for path, digest in observed_raw.items()
-        }
-        if isinstance(observed_raw, Mapping)
-        else {}
-    )
+    if isinstance(observed_raw, Mapping):
+        observed = {}
+        for path, digest in observed_raw.items():
+            path_text = str(path)
+            digest_text = str(digest).lower()
+            if not path_text or not _SHA256_RE.fullmatch(digest_text):
+                normalisation_problems.append(
+                    f"OBSERVED_SOURCE_IDENTITY_INVALID:{path_text or '<missing>'}"
+                )
+            observed[path_text] = digest_text
+    else:
+        observed = {}
+        normalisation_problems.append("OBSERVED_SOURCE_IDENTITIES_INVALID")
+
     scope_raw = evidence.get("in_scope", [])
-    in_scope = tuple(
-        sorted(
-            str(item)
-            for item in scope_raw
-            if isinstance(item, str) and item
-        )
-    )
+    scope_items: list[str] = []
+    if not isinstance(scope_raw, Sequence) or isinstance(
+        scope_raw, (str, bytes, bytearray)
+    ):
+        normalisation_problems.append("IN_SCOPE_INVALID")
+        scope_raw = []
+    for index, item in enumerate(scope_raw):
+        if not isinstance(item, str) or not item:
+            normalisation_problems.append(f"IN_SCOPE_ITEM_INVALID:{index}")
+            continue
+        scope_items.append(item)
+    in_scope = tuple(sorted(scope_items))
+
     collection_complete = evidence.get("collection_complete") is True
     errors_raw = evidence.get("collection_errors", [])
+    caller_errors: list[str] = []
+    if not isinstance(errors_raw, Sequence) or isinstance(
+        errors_raw, (str, bytes, bytearray)
+    ):
+        normalisation_problems.append("COLLECTION_ERRORS_INVALID")
+    else:
+        caller_errors.extend(str(item) for item in errors_raw)
     collection_errors = tuple(
-        str(item)
-        for item in errors_raw
-        if isinstance(errors_raw, Sequence)
-        and not isinstance(errors_raw, (str, bytes, bytearray))
+        sorted(set(caller_errors + normalisation_problems))
     )
 
     evidence_gaps: list[str] = []

@@ -242,3 +242,44 @@ def test_missing_scope_fails_closed_and_reports_no_uncovered_claim():
     assert report["is_complete"] is False
     assert "IN_SCOPE_MISSING" in report["evidence_gaps"]
     assert report["uncovered_changes"] == []
+
+
+def test_malformed_normalized_inputs_cannot_be_silently_dropped_as_complete():
+    evidence = _base_evidence()
+    evidence["knowledge_artifacts"] = ["not-an-artifact"]
+    evidence["changes"] = ["not-a-change"]
+    evidence["observed_source_sha256"] = {"src/current.py": "not-a-sha"}
+    evidence["in_scope"] = ["src/**", None]
+
+    report = ri.analyze_knowledge_applicability(evidence).to_dict()
+
+    assert report["is_complete"] is False
+    assert "KNOWLEDGE_ARTIFACT_INVALID:0" in report["collection_errors"]
+    assert "CHANGE_INVALID:0" in report["collection_errors"]
+    assert (
+        "OBSERVED_SOURCE_IDENTITY_INVALID:src/current.py"
+        in report["collection_errors"]
+    )
+    assert "IN_SCOPE_ITEM_INVALID:1" in report["collection_errors"]
+    assert ri.verify_knowledge_applicability_report(report) is True
+
+
+def test_malformed_nested_refs_and_changes_fail_closed():
+    evidence = _base_evidence()
+    evidence["knowledge_artifacts"] = [
+        {
+            "artifact_id": "bad",
+            "path": "knowledge/bad.md",
+            "source_refs": ["bad-ref"],
+            "covers": ["src/**", None],
+        }
+    ]
+    evidence["changes"] = [{"kind": "rename", "path": "", "old_path": ""}]
+
+    report = ri.analyze_knowledge_applicability(evidence).to_dict()
+
+    assert report["is_complete"] is False
+    assert "SOURCE_REF_INVALID:0:0" in report["collection_errors"]
+    assert "COVER_INVALID:0:1" in report["collection_errors"]
+    assert "CHANGE_PATH_MISSING:0" in report["collection_errors"]
+    assert "CHANGE_OLD_PATH_MISSING:0" in report["collection_errors"]
