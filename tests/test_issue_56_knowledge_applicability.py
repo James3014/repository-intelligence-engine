@@ -257,11 +257,71 @@ def test_malformed_normalized_inputs_cannot_be_silently_dropped_as_complete():
     assert "KNOWLEDGE_ARTIFACT_INVALID:0" in report["collection_errors"]
     assert "CHANGE_INVALID:0" in report["collection_errors"]
     assert (
-        "OBSERVED_SOURCE_IDENTITY_INVALID:src/current.py"
+        "OBSERVED_SOURCE_SHA256_INVALID:src/current.py"
         in report["collection_errors"]
     )
     assert "IN_SCOPE_ITEM_INVALID:1" in report["collection_errors"]
     assert ri.verify_knowledge_applicability_report(report) is True
+
+
+def test_invalid_expected_sha_cannot_suppress_uncovered_change():
+    evidence = _base_evidence()
+    evidence["knowledge_artifacts"] = [
+        {
+            "artifact_id": "bad-sha",
+            "path": "knowledge/bad-sha.md",
+            "source_refs": [
+                {
+                    "source_path": "src/uncovered.py",
+                    "expected_content_sha256": "not-a-sha",
+                }
+            ],
+            "covers": [],
+        }
+    ]
+    evidence["changes"] = [{"kind": "MODIFY", "path": "src/uncovered.py"}]
+    evidence["observed_source_sha256"] = {"src/uncovered.py": D}
+
+    report = ri.analyze_knowledge_applicability(evidence).to_dict()
+
+    assert report["is_complete"] is False
+    assert "SOURCE_SHA256_INVALID:0:0" in report["collection_errors"]
+    assert report["relations"][0]["status"] == "UNKNOWN"
+    assert report["uncovered_changes"] == ["src/uncovered.py"]
+
+
+def test_null_and_non_string_identities_fail_closed_without_string_coercion():
+    evidence = _base_evidence()
+    evidence["knowledge_artifacts"] = [
+        {
+            "artifact_id": None,
+            "path": None,
+            "source_refs": [
+                {
+                    "source_path": None,
+                    "expected_content_sha256": A,
+                }
+            ],
+            "covers": [],
+        }
+    ]
+    evidence["changes"] = [{"kind": "MODIFY", "path": None}]
+    evidence["observed_source_sha256"] = {None: A}
+
+    report = ri.analyze_knowledge_applicability(evidence).to_dict()
+
+    assert report["is_complete"] is False
+    assert report["relations"][0]["status"] == "UNKNOWN"
+    assert "ARTIFACT_ID_INVALID:0" in report["collection_errors"]
+    assert "ARTIFACT_PATH_INVALID:0" in report["collection_errors"]
+    assert "SOURCE_PATH_INVALID:0:0" in report["collection_errors"]
+    assert "CHANGE_PATH_MISSING:0" in report["collection_errors"]
+    assert "CHANGE_PATH_INVALID:0" in report["collection_errors"]
+    assert "OBSERVED_SOURCE_PATH_INVALID:0" in report["collection_errors"]
+    serialized = json.dumps(report, sort_keys=True)
+    assert '"artifact_id": "None"' not in serialized
+    assert '"artifact_path": "None"' not in serialized
+    assert '"source_path": "None"' not in serialized
 
 
 def test_malformed_nested_refs_and_changes_fail_closed():

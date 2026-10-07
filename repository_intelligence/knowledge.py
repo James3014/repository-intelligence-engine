@@ -150,12 +150,24 @@ def _normalise_artifacts(
             if not isinstance(ref, Mapping):
                 problems.append(f"SOURCE_REF_INVALID:{index}:{ref_index}")
                 continue
+            source_path = ref.get("source_path")
+            expected = ref.get("expected_content_sha256")
+            ref_valid = True
+            if not isinstance(source_path, str) or not source_path:
+                problems.append(f"SOURCE_PATH_INVALID:{index}:{ref_index}")
+                ref_valid = False
+            if (
+                not isinstance(expected, str)
+                or not _SHA256_RE.fullmatch(expected.lower())
+            ):
+                problems.append(f"SOURCE_SHA256_INVALID:{index}:{ref_index}")
+                ref_valid = False
+            if not ref_valid:
+                continue
             norm_refs.append(
                 {
-                    "source_path": str(ref.get("source_path", "")),
-                    "expected_content_sha256": str(
-                        ref.get("expected_content_sha256", "")
-                    ).lower(),
+                    "source_path": source_path,
+                    "expected_content_sha256": expected.lower(),
                 }
             )
 
@@ -171,10 +183,19 @@ def _normalise_artifacts(
                 continue
             norm_covers.append(item)
 
+        artifact_id = raw.get("artifact_id")
+        artifact_path = raw.get("path")
+        if not isinstance(artifact_id, str) or not artifact_id:
+            problems.append(f"ARTIFACT_ID_INVALID:{index}")
+            artifact_id = ""
+        if not isinstance(artifact_path, str) or not artifact_path:
+            problems.append(f"ARTIFACT_PATH_INVALID:{index}")
+            artifact_path = ""
+
         artifacts.append(
             {
-                "artifact_id": str(raw.get("artifact_id", "")),
-                "path": str(raw.get("path", "")),
+                "artifact_id": artifact_id,
+                "path": artifact_path,
                 "source_refs": sorted(
                     norm_refs,
                     key=lambda item: (
@@ -202,16 +223,30 @@ def _normalise_changes(
         if not isinstance(raw, Mapping):
             problems.append(f"CHANGE_INVALID:{index}")
             continue
-        kind = str(raw.get("kind", "")).upper()
-        path = str(raw.get("path", ""))
+        kind_raw = raw.get("kind")
+        kind = kind_raw.upper() if isinstance(kind_raw, str) else ""
+        path_raw = raw.get("path")
+        path = path_raw if isinstance(path_raw, str) else ""
         item = {"kind": kind, "path": path}
-        old_path = raw.get("old_path")
-        if old_path is not None:
-            item["old_path"] = str(old_path)
-        if kind not in {"ADD", "MODIFY", "DELETE", "RENAME"}:
+
+        if not isinstance(path_raw, str):
+            problems.append(f"CHANGE_PATH_INVALID:{index}")
+        if not isinstance(kind_raw, str) or kind not in {
+            "ADD",
+            "MODIFY",
+            "DELETE",
+            "RENAME",
+        }:
             problems.append(f"CHANGE_KIND_INVALID:{index}")
         if kind in {"ADD", "MODIFY", "RENAME"} and not path:
             problems.append(f"CHANGE_PATH_MISSING:{index}")
+
+        old_path = raw.get("old_path")
+        if old_path is not None:
+            if isinstance(old_path, str):
+                item["old_path"] = old_path
+            else:
+                problems.append(f"CHANGE_OLD_PATH_INVALID:{index}")
         if kind in {"DELETE", "RENAME"} and not item.get("old_path"):
             problems.append(f"CHANGE_OLD_PATH_MISSING:{index}")
         changes.append(item)
@@ -284,14 +319,21 @@ def analyze_knowledge_applicability(
     observed_raw = evidence.get("observed_source_sha256", {})
     if isinstance(observed_raw, Mapping):
         observed = {}
-        for path, digest in observed_raw.items():
-            path_text = str(path)
-            digest_text = str(digest).lower()
-            if not path_text or not _SHA256_RE.fullmatch(digest_text):
+        for index, (path, digest) in enumerate(observed_raw.items()):
+            if not isinstance(path, str) or not path:
                 normalisation_problems.append(
-                    f"OBSERVED_SOURCE_IDENTITY_INVALID:{path_text or '<missing>'}"
+                    f"OBSERVED_SOURCE_PATH_INVALID:{index}"
                 )
-            observed[path_text] = digest_text
+                continue
+            if (
+                not isinstance(digest, str)
+                or not _SHA256_RE.fullmatch(digest.lower())
+            ):
+                normalisation_problems.append(
+                    f"OBSERVED_SOURCE_SHA256_INVALID:{path}"
+                )
+                continue
+            observed[path] = digest.lower()
     else:
         observed = {}
         normalisation_problems.append("OBSERVED_SOURCE_IDENTITIES_INVALID")
@@ -318,7 +360,13 @@ def analyze_knowledge_applicability(
     ):
         normalisation_problems.append("COLLECTION_ERRORS_INVALID")
     else:
-        caller_errors.extend(str(item) for item in errors_raw)
+        for index, item in enumerate(errors_raw):
+            if not isinstance(item, str) or not item:
+                normalisation_problems.append(
+                    f"COLLECTION_ERROR_INVALID:{index}"
+                )
+                continue
+            caller_errors.append(item)
     collection_errors = tuple(
         sorted(set(caller_errors + normalisation_problems))
     )
