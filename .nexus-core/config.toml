@@ -1,6 +1,24 @@
-version = 1
+version = 2
 base_ref = "origin/main"
 allowed_patterns = ["**"]
 deletion_policy = "FORBID"
-verifier_command = ["python3", "-m", "pytest", "-q"]
+universe_generation = 1
+materials = []
+
+[[verifiers]]
+id = "pytest"
+command = ["python3", "-m", "pytest", "-q"]
 timeout_seconds = 1800
+logical_subject_id = "repository-intelligence/full-tests"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+
+[[verifiers]]
+id = "diff-check"
+command = ["git", "diff", "--cached", "--check", "HEAD"]
+timeout_seconds = 300
+logical_subject_id = "repository-intelligence/diff-hygiene"
+evidence_kind = "static-check"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
