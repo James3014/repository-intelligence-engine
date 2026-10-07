@@ -399,12 +399,14 @@ def analyze_knowledge_applicability(
         )
         unknown = global_unknown
 
-        if not artifact_id or not artifact_path:
+        claim_eligible = bool(artifact_id and artifact_path)
+        if not claim_eligible:
             unknown = True
             reasons.append("ARTIFACT_IDENTITY_INVALID")
 
         exact_paths = {ref["source_path"] for ref in refs if ref["source_path"]}
-        claimed_paths.update(exact_paths)
+        if claim_eligible:
+            claimed_paths.update(exact_paths)
 
         for ref in refs:
             source_path = ref["source_path"]
@@ -433,7 +435,8 @@ def analyze_knowledge_applicability(
                 continue
             if _matches_any(path, covers):
                 affected_paths.add(path)
-                claimed_paths.add(path)
+                if claim_eligible:
+                    claimed_paths.add(path)
 
         if global_unknown or unknown:
             status = KnowledgeApplicabilityStatus.UNKNOWN
@@ -457,10 +460,19 @@ def analyze_knowledge_applicability(
             )
         )
 
-    uncovered = tuple(
-        path
-        for path in changed_paths
-        if _matches_any(path, in_scope) and path not in claimed_paths
+    claim_inventory_complete = (
+        identity_ok
+        and collection_complete
+        and not caller_errors
+    )
+    uncovered = (
+        tuple(
+            path
+            for path in changed_paths
+            if _matches_any(path, in_scope) and path not in claimed_paths
+        )
+        if claim_inventory_complete
+        else ()
     )
 
     is_complete = (
