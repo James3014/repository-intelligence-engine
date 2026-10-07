@@ -131,20 +131,23 @@ def _hash_payload(payload: Mapping[str, Any]) -> str:
 
 def _normalise_artifacts(
     value: Any,
-) -> tuple[tuple[dict[str, Any], ...], tuple[str, ...]]:
+) -> tuple[tuple[dict[str, Any], ...], tuple[str, ...], bool]:
     problems: list[str] = []
+    inventory_structurally_complete = True
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-        return (), ("KNOWLEDGE_ARTIFACTS_INVALID",)
+        return (), ("KNOWLEDGE_ARTIFACTS_INVALID",), False
     artifacts: list[dict[str, Any]] = []
     for index, raw in enumerate(value):
         if not isinstance(raw, Mapping):
             problems.append(f"KNOWLEDGE_ARTIFACT_INVALID:{index}")
+            inventory_structurally_complete = False
             continue
         refs = raw.get("source_refs", [])
         covers = raw.get("covers", [])
         norm_refs: list[dict[str, str]] = []
         if not isinstance(refs, Sequence) or isinstance(refs, (str, bytes, bytearray)):
             problems.append(f"SOURCE_REFS_INVALID:{index}")
+            inventory_structurally_complete = False
             refs = []
         for ref_index, ref in enumerate(refs):
             if not isinstance(ref, Mapping):
@@ -176,6 +179,7 @@ def _normalise_artifacts(
             covers, (str, bytes, bytearray)
         ):
             problems.append(f"COVERS_INVALID:{index}")
+            inventory_structurally_complete = False
             covers = []
         for cover_index, item in enumerate(covers):
             if not isinstance(item, str) or not item:
@@ -209,6 +213,7 @@ def _normalise_artifacts(
     return (
         tuple(sorted(artifacts, key=lambda item: (item["artifact_id"], item["path"]))),
         tuple(sorted(set(problems))),
+        inventory_structurally_complete,
     )
 
 
@@ -307,8 +312,8 @@ def analyze_knowledge_applicability(
         evidence = {}
 
     identity, identity_ok = _identity_dict(evidence.get("snapshot", {}))
-    artifacts, artifact_problems = _normalise_artifacts(
-        evidence.get("knowledge_artifacts", [])
+    artifacts, artifact_problems, artifact_inventory_structurally_complete = (
+        _normalise_artifacts(evidence.get("knowledge_artifacts", []))
     )
     changes, change_problems = _normalise_changes(evidence.get("changes", []))
 
@@ -355,10 +360,12 @@ def analyze_knowledge_applicability(
     collection_complete = evidence.get("collection_complete") is True
     errors_raw = evidence.get("collection_errors", [])
     caller_errors: list[str] = []
+    collection_errors_input_valid = True
     if not isinstance(errors_raw, Sequence) or isinstance(
         errors_raw, (str, bytes, bytearray)
     ):
         normalisation_problems.append("COLLECTION_ERRORS_INVALID")
+        collection_errors_input_valid = False
     else:
         for index, item in enumerate(errors_raw):
             if not isinstance(item, str) or not item:
@@ -463,6 +470,8 @@ def analyze_knowledge_applicability(
     claim_inventory_complete = (
         identity_ok
         and collection_complete
+        and artifact_inventory_structurally_complete
+        and collection_errors_input_valid
         and not caller_errors
     )
     uncovered = (

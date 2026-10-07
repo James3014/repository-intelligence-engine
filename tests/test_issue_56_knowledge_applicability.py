@@ -428,6 +428,53 @@ def test_invalid_artifact_identity_cannot_suppress_uncovered_change():
     assert report["uncovered_changes"] == ["src/uncovered.py"]
 
 
+def test_unparseable_artifact_inventory_cannot_assert_uncovered():
+    evidence = _base_evidence()
+    evidence["knowledge_artifacts"] = "not-a-list"
+    evidence["changes"] = [{"kind": "MODIFY", "path": "src/uncovered.py"}]
+    evidence["observed_source_sha256"] = {"src/uncovered.py": D}
+
+    report = ri.analyze_knowledge_applicability(evidence).to_dict()
+
+    assert report["is_complete"] is False
+    assert "KNOWLEDGE_ARTIFACTS_INVALID" in report["collection_errors"]
+    assert report["uncovered_changes"] == []
+
+
+def test_unparseable_claim_container_cannot_assert_uncovered():
+    evidence = _base_evidence()
+    evidence["knowledge_artifacts"] = [
+        {
+            "artifact_id": "bad-container",
+            "path": "knowledge/bad-container.md",
+            "source_refs": "not-a-list",
+            "covers": [],
+        }
+    ]
+    evidence["changes"] = [{"kind": "MODIFY", "path": "src/uncovered.py"}]
+    evidence["observed_source_sha256"] = {"src/uncovered.py": D}
+
+    report = ri.analyze_knowledge_applicability(evidence).to_dict()
+
+    assert report["is_complete"] is False
+    assert "SOURCE_REFS_INVALID:0" in report["collection_errors"]
+    assert report["uncovered_changes"] == []
+
+
+def test_unparseable_collection_error_channel_cannot_assert_uncovered():
+    evidence = _base_evidence()
+    evidence["knowledge_artifacts"] = []
+    evidence["changes"] = [{"kind": "MODIFY", "path": "src/uncovered.py"}]
+    evidence["observed_source_sha256"] = {"src/uncovered.py": D}
+    evidence["collection_errors"] = "not-a-list"
+
+    report = ri.analyze_knowledge_applicability(evidence).to_dict()
+
+    assert report["is_complete"] is False
+    assert "COLLECTION_ERRORS_INVALID" in report["collection_errors"]
+    assert report["uncovered_changes"] == []
+
+
 def test_malformed_nested_refs_and_changes_fail_closed():
     evidence = _base_evidence()
     evidence["knowledge_artifacts"] = [
