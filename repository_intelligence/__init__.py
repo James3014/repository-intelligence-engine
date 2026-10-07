@@ -54,6 +54,15 @@ from .impact import analyze_change_impact, verify_change_impact_report
 from .cfi import analyze_ci_failure_intelligence, verify_ci_failure_intelligence_report
 from .eia import plan_external_intelligence_automation, verify_external_intelligence_automation_envelope
 from .retrieval import analyze_repository_query, verify_repository_query_evidence
+from .knowledge import (
+    KNOWLEDGE_APPLICABILITY_CLAIM_CEILING,
+    KNOWLEDGE_APPLICABILITY_SCHEMA,
+    KnowledgeApplicabilityRelationV1,
+    KnowledgeApplicabilityReportV1,
+    KnowledgeApplicabilityStatus,
+    analyze_knowledge_applicability,
+    verify_knowledge_applicability_report,
+)
 from .core import (
     analyze_cross_pr_overlap,
     build_repository_intelligence_report,
@@ -69,6 +78,8 @@ __all__ = [
     "CI_EVIDENCE_CLAIM_CEILING",
     "REPOSITORY_FACTS_CLAIM_CEILING",
     "REPOSITORY_QUERY_CLAIM_CEILING",
+    "KNOWLEDGE_APPLICABILITY_CLAIM_CEILING",
+    "KNOWLEDGE_APPLICABILITY_SCHEMA",
     "TERMINAL_FAILURE_STATUSES",
     "SUPPORTED_TERMINAL_FAILURES",
     "is_terminal_failure_status",
@@ -98,6 +109,9 @@ __all__ = [
     "FusedCandidateV1",
     "RepositoryQueryEvidenceReportV1",
     "RepositoryQueryResolution",
+    "KnowledgeApplicabilityStatus",
+    "KnowledgeApplicabilityRelationV1",
+    "KnowledgeApplicabilityReportV1",
     "revision_identity",
     "classify_readiness",
     "analyze_cross_pr_overlap",
@@ -113,6 +127,8 @@ __all__ = [
     "verify_structured_facts_report",
     "analyze_repository_query",
     "verify_repository_query_evidence",
+    "analyze_knowledge_applicability",
+    "verify_knowledge_applicability_report",
     "build_repository_intelligence_report",
     "verify_repository_intelligence_report",
     "CHECK_ROLE_SCHEMA",
