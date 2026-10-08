@@ -2,7 +2,7 @@
 
 Deterministic, pure local JSON adapter for Repository Intelligence Core V1/V1.1 operations.
 No GitHub/network/state writes.
-Claim ceilings: PR_INTELLIGENCE_ONLY, CI_EVIDENCE_ONLY, AUTOMATION_ADVISORY_ONLY, REPOSITORY_FACTS_ONLY, REPOSITORY_QUERY_EVIDENCE_ONLY.
+Claim ceilings: PR_INTELLIGENCE_ONLY, CI_EVIDENCE_ONLY, AUTOMATION_ADVISORY_ONLY, REPOSITORY_FACTS_ONLY, REPOSITORY_QUERY_EVIDENCE_ONLY, REPOSITORY_KNOWLEDGE_APPLICABILITY_EVIDENCE_ONLY, GUARD_SEMANTIC_DELTA_ADVISORY_EVIDENCE_ONLY.
 """
 from __future__ import annotations
 
@@ -28,7 +28,9 @@ from .eia import (
     plan_external_intelligence_automation,
 )
 from .facts import analyze_structured_facts
+from .guard_delta import analyze_guard_semantic_delta
 from .impact import analyze_change_impact
+from .knowledge import analyze_knowledge_applicability
 from .retrieval import analyze_repository_query
 
 OPERATIONS: frozenset[str] = frozenset({
@@ -41,6 +43,8 @@ OPERATIONS: frozenset[str] = frozenset({
     "eia",
     "facts",
     "query",
+    "knowledge",
+    "guard-delta",
 })
 
 
@@ -135,6 +139,24 @@ def execute_operation(operation: str, data: Any) -> dict[str, Any]:
         if not isinstance(data, dict):
             raise ValueError("Input for 'query' must be a JSON object mapping")
         res = analyze_repository_query(data)
+        return {
+            "operation": operation,
+            "claim_ceiling": res.claim_ceiling,
+            "result": res.to_dict(),
+        }
+    elif operation == "knowledge":
+        if not isinstance(data, dict):
+            raise ValueError("Input for 'knowledge' must be a JSON object mapping")
+        res = analyze_knowledge_applicability(data)
+        return {
+            "operation": operation,
+            "claim_ceiling": res.claim_ceiling,
+            "result": res.to_dict(),
+        }
+    elif operation == "guard-delta":
+        if not isinstance(data, dict):
+            raise ValueError("Input for 'guard-delta' must be a JSON object mapping")
+        res = analyze_guard_semantic_delta(data)
         return {
             "operation": operation,
             "claim_ceiling": res.claim_ceiling,
