@@ -14,7 +14,7 @@ It answers questions such as:
 
 The engine is deliberately **advisory-only**. It can describe repository state and produce hash-bound evidence, but it cannot approve, merge, release, publish, dispatch workers, or execute pull-request source.
 
-Current release: **`v0.1.2`**
+Current release: **`v0.1.3`**
 
 License: **Apache-2.0**
 
@@ -63,7 +63,7 @@ This makes the same intelligence reusable from GitHub Actions, Dev MCP, a CLI, P
 The following are canonical in this repository:
 
 - the `repository_intelligence` Python package;
-- all nine V1/V1.1 intelligence operations;
+- all eleven CLI intelligence operations;
 - the CLI adapter;
 - the read-only GitHub Action;
 - the GitHub REST acquisition adapter;
@@ -89,6 +89,21 @@ DevSpace can project the same engine through MCP, but DevSpace is a **consumer a
 | `eia` | "May an external diagnosis action be considered for this exact evidence?" | creates a hash-bound, idempotent advisory envelope for unattended/cloud consumers | `AUTOMATION_ADVISORY_ONLY` |
 | `facts` | "What structured semantic facts does this exact revision contain?" | emits revision-bound, deterministic AST facts (`EMPTY_EXCEPTION_HANDLER`, `BROAD_EXCEPTION_HANDLER`, `SUBPROCESS_CALL`, `NETWORK_ENDPOINT_ADDED`, `VISIBLE_AUTH_CHECK`, `RELATED_TEST_CHANGED`, `SILENT_RETRY_PATTERN`, `HARDCODED_LOCALHOST`) | `REPOSITORY_FACTS_ONLY` |
 | `query` | "Which repository candidates should be narrowed toward this query?" | emits a bounded, deterministically fused candidate set with exact-match preservation, before any semantic review | `REPOSITORY_QUERY_EVIDENCE_ONLY` |
+| `knowledge` | "Are repository-bound knowledge artifacts still applicable to this change?" | classifies artifacts as `CURRENT`, `STALE_EXACT_SOURCE`, `AFFECTED_BY_COVERAGE`, or `UNKNOWN` from exact source changes and declared coverage (`reviewer.knowledge_applicability.v1`) | `REPOSITORY_KNOWLEDGE_APPLICABILITY_EVIDENCE_ONLY` |
+| `guard-delta` | "Did this change tighten or loosen a guard / policy?" | classifies normalized guard structure changes as `TIGHTENS`, `LOOSENS`, `MIXED`, `UNCHANGED`, or `UNKNOWN` (`reviewer.guard_semantic_delta.v1`) | `GUARD_SEMANTIC_DELTA_ADVISORY_EVIDENCE_ONLY` |
+
+The CLI exposes all eleven operations: `cfi`, `ci`, `eia`, `facts`, `guard-delta`, `impact`, `knowledge`, `overlap`, `query`, `readiness`, `revision`. Report schemas: `ci` is `reviewer.ci_failure_evidence.v1`, `impact` is `reviewer.change_impact.v1`, `cfi` is `reviewer.ci_failure_intelligence.v1`, `eia` is `reviewer.external_intelligence_automation.v1`, `facts` is `reviewer.structured_facts.v1`, `query` is `reviewer.repository_query_evidence.v1`, `knowledge` is `reviewer.knowledge_applicability.v1`, and `guard-delta` is `reviewer.guard_semantic_delta.v1`. A task-aware query extension (`reviewer.task_aware_repository_query_evidence.v1`, ceiling `TASK_AWARE_REPOSITORY_QUERY_EVIDENCE_SHADOW_ONLY`) is available as a Python API in `repository_intelligence.retrieval` and is not a separate CLI operation.
+
+### Check-role classification
+
+`repository_intelligence.check_roles.classify_check_roles` is a Python-level helper (not a CLI operation) that separates required gates from advisory observers. It emits a `repository_intelligence.check_roles.v1` report under the `CI_POLICY_ROLE_EVIDENCE_ONLY` ceiling:
+
+- roles (`REQUIRED_GATE` / `ADVISORY_CHECK`) come only from the caller-supplied `policy_roles`; missing, duplicate, or unnamed checks are `UNKNOWN_POLICY_ROLE`;
+- every check is bound to the exact review head, and a check whose `head_sha` is missing or different is never counted as successful;
+- an incomplete review identity (repository, head, base, current main) is rejected;
+- `verify_check_role_report` rebuilds the report and rejects tampering.
+
+It does not infer repository required-check topology and grants no merge authority.
 
 ### Readiness dispositions
 
@@ -415,7 +430,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - id: ri
-        uses: James3014/repository-intelligence-engine@v0.1.2
+        uses: James3014/repository-intelligence-engine@v0.1.3
 
       - uses: actions/upload-artifact@v4
         with:
@@ -475,7 +490,7 @@ Operations such as cross-PR `overlap` and graph-based `impact` require evidence 
 
 #### Optional terminal observation action
 
-`v0.1.2` also publishes `terminal/` as a second-stage composite Action for consumers that need a bounded observation after the external check/status set becomes terminal and remains stable for a quiescence window. It is intentionally separate from the PR-event snapshot above.
+`v0.1.2` and later also publish `terminal/` as a second-stage composite Action for consumers that need a bounded observation after the external check/status set becomes terminal and remains stable for a quiescence window. It is intentionally separate from the PR-event snapshot above.
 
 ```yaml
 jobs:
@@ -483,14 +498,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - id: ri
-        uses: James3014/repository-intelligence-engine@v0.1.2
+        uses: James3014/repository-intelligence-engine@v0.1.3
 
   terminal:
     needs: snapshot
     runs-on: ubuntu-latest
     steps:
       - id: ri-terminal
-        uses: James3014/repository-intelligence-engine/terminal@v0.1.2
+        uses: James3014/repository-intelligence-engine/terminal@v0.1.3
         with:
           pr-number: ${{ github.event.pull_request.number }}
           expected-head-sha: ${{ github.event.pull_request.head.sha }}
@@ -510,7 +525,7 @@ Install directly from the immutable release tag:
 
 ```bash
 python3 -m pip install \
-  "git+https://github.com/James3014/repository-intelligence-engine.git@v0.1.2"
+  "git+https://github.com/James3014/repository-intelligence-engine.git@v0.1.3"
 ```
 
 Then:
@@ -536,6 +551,9 @@ impact
 cfi
 eia
 facts
+query
+knowledge
+guard-delta
 ```
 
 Example:
@@ -913,7 +931,7 @@ You do **not** copy the engine into each repository. All consumers should depend
 For CI and automation, prefer immutable version pinning:
 
 ```yaml
-uses: James3014/repository-intelligence-engine@v0.1.2
+uses: James3014/repository-intelligence-engine@v0.1.3
 ```
 
 For environments that require a commit-level pin, use the release commit associated with the tag.
@@ -1001,13 +1019,12 @@ A higher-level controller may use Repository Intelligence as evidence, but autho
 
 ## Current status
 
-`v0.1.1` is the current immutable release and packages the seven-operation
-independent consumer product, including Commit Status acquisition alongside Check Runs.
-The current Unreleased branch adds the eighth local `facts` operation:
+`v0.1.3` is the current release and packages the eleven-operation
+independent consumer product (`facts`, `query`, `knowledge`, and `guard-delta` added since `v0.1.2`), check-role classification, and bounded GitHub rate-limit handling:
 
 - canonical engine / CLI / GitHub Action are hosted in this repository;
-- seven native operations are in immutable `v0.1.1`; `facts` is Unreleased;
-- Dev MCP currently projects the seven released operations; `facts` needs a separate projection/cutover;
+- eleven native operations are available through the CLI at `v0.1.3`;
+- Dev MCP currently projects the seven original operations; `facts`, `query`, `knowledge`, and `guard-delta` need a separate projection/cutover;
 - a fresh `v0.1.1` GitHub Actions cross-repository canary succeeded against `Nexus-new` PR #967 with complete exact-identity-bound evidence;
 - legacy reviewer code now consumes / forwards to the independent engine rather than owning duplicate intelligence implementations.
 
@@ -1020,7 +1037,7 @@ This supports the claim that Repository Intelligence is reusable across reposito
 - Accepted V1.1 behavior baseline: `aab512ff738650cbffcbc44532b9d99f3787d138`
 - Initial extracted engine source: `693ae7cf59e3b090ee873b7196ee330b30e26221`
 - Initial consumer-productized release: `v0.1.0` at `a8b9a00a6f3ea3e9ade0c6ef494d0fa88a2d73b2`
-- Current immutable release: `v0.1.1` at `cb081c20549ce5105e557794d01055bff6728f6c` (tree `c2cf20b7034b5a715195cc00116a5be62a64c40b`)
+- Previous immutable release: `v0.1.1` at `cb081c20549ce5105e557794d01055bff6728f6c` (tree `c2cf20b7034b5a715195cc00116a5be62a64c40b`)
 - Historical extraction / compatibility source: `James3014/nexus-opencli-reviewer`
 
 Repository Intelligence should remain one canonical advisory engine with multiple adapters, not multiple copies of the same decision logic.
