@@ -2,12 +2,17 @@ version = 2
 base_ref = "origin/main"
 allowed_patterns = ["**"]
 deletion_policy = "FORBID"
-universe_generation = 1
+universe_generation = 2
 materials = []
+
+[isolation]
+mode = "container"
+image = "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:58683a39536f1f4ed2e1dd79cf155edccfb47731aba8964bd0312aac942126cf"
+network = "bridge"
 
 [[verifiers]]
 id = "pytest"
-command = ["python3", "-m", "pytest", "-q"]
+command = ["uv", "run", "--no-project", "--with", "pytest==9.0.2", "python", "-m", "pytest", "-q"]
 timeout_seconds = 1800
 logical_subject_id = "repository-intelligence/full-tests"
 evidence_kind = "test-result"
@@ -16,7 +21,7 @@ applicability = "APPLICABLE"
 
 [[verifiers]]
 id = "diff-check"
-command = ["git", "diff", "--cached", "--check", "HEAD"]
+command = ["git", "-c", "safe.directory=*", "diff", "--cached", "--check", "HEAD"]
 timeout_seconds = 300
 logical_subject_id = "repository-intelligence/diff-hygiene"
 evidence_kind = "static-check"
