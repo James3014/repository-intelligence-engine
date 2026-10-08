@@ -97,3 +97,5 @@ The project follows semantic versioning while it remains in the `0.x` series. Im
 ## [0.1.0]
 
 Initial consumer-productized release with the canonical deterministic engine, CLI, read-only GitHub Action, hash-bound report verification, and the initial cross-repository canary against `James3014/Nexus-new`.
+
+Verified by the Nexus Core two-job gate (container isolation, signed receipts) since 2026-10-09.
