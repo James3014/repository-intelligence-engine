@@ -4,53 +4,40 @@ All notable changes to Repository Intelligence Engine are documented here.
 
 The project follows semantic versioning while it remains in the `0.x` series. Immutable release tags are never moved after publication.
 
-## [Unreleased]
+## [0.1.3] - 2026-10-08
 
 ### Added
 
-- New `facts` operation emitting a `reviewer.structured_facts.v1` report of revision-bound, deterministic semantic-pattern facts with exact `content_sha256`.
-- `RepositoryFactKind`, `RepositoryFactStatus`, evidence, fact, and report contracts plus the `REPOSITORY_FACTS_ONLY` claim ceiling.
-- `analyze_structured_facts` classification engine and `verify_structured_facts_report` semantic verifier (recomputes derived facts from embedded neutral inputs and rejects tampering, not only byte-hash mismatch).
-- Python AST pattern collector `adapters/python_fact_detector.py` (stdlib `ast` only); classes `EMPTY_EXCEPTION_HANDLER`, `BROAD_EXCEPTION_HANDLER`, `SUBPROCESS_CALL`, and `SILENT_RETRY_PATTERN` are covered deterministically; `NETWORK_ENDPOINT_ADDED` and `VISIBLE_AUTH_CHECK` remain `UNKNOWN` pending detectors.
-- `RELATED_TEST_CHANGED` derived from `changed_files` and scoped to the exact revision identity.
+- New `facts` operation emitting a `reviewer.structured_facts.v1` report of revision-bound, deterministic semantic-pattern facts with exact `content_sha256` (Issue #27). Adds the `REPOSITORY_FACTS_ONLY` claim ceiling, the `analyze_structured_facts` engine, the `verify_structured_facts_report` semantic verifier (recomputes derived facts from embedded neutral inputs, so tampering is rejected and not only byte-hash mismatch), and the stdlib-`ast` collector `adapters/python_fact_detector.py`. `EMPTY_EXCEPTION_HANDLER`, `BROAD_EXCEPTION_HANDLER`, `SUBPROCESS_CALL`, and `SILENT_RETRY_PATTERN` are detected deterministically; `NETWORK_ENDPOINT_ADDED` and `VISIBLE_AUTH_CHECK` remain `UNKNOWN` pending detectors; `RELATED_TEST_CHANGED` is derived from `changed_files`.
+- New `query` operation emitting a `reviewer.repository_query_evidence.v1` report that narrows repository candidates before any semantic review (Issue #29). Adds the `REPOSITORY_QUERY_EVIDENCE_ONLY` claim ceiling, the `analyze_repository_query` reciprocal-rank-fusion engine (`k=60`), the `verify_repository_query_evidence` semantic verifier, retriever/candidate/report contracts, and `scripts/benchmark_retrieval.py`.
+- Task-aware retrieval extension (Issue #31): `analyze_task_aware_query` / `verify_task_aware_query_evidence` produce a `reviewer.task_aware_repository_query_evidence.v1` report under the `TASK_AWARE_REPOSITORY_QUERY_EVIDENCE_SHADOW_ONLY` ceiling, with weighted fusion order, per-source contribution, missing-source and evidence-gap reporting, and candidate-reduction accounting. The canonical query evidence is preserved and weighted projections are recomputed by the verifier. This is a Python-level API in `repository_intelligence.retrieval`, not a separate CLI operation. Also adds `scripts/benchmark_real_repository_retrieval.py`.
+- Check-role classification `repository_intelligence/check_roles.py` (Issues #32, #44): `classify_check_roles` and `verify_check_role_report` emit a `repository_intelligence.check_roles.v1` report that separates `REQUIRED_GATE` from `ADVISORY_CHECK` checks using caller-supplied policy roles, under the `CI_POLICY_ROLE_EVIDENCE_ONLY` ceiling. Checks with a missing name, a duplicate name, or no policy role are `UNKNOWN_POLICY_ROLE`. Each check is bound to the exact review head: a check whose `head_sha` is missing or differs from the review head is not counted as successful (`CHECK_HEAD_MISSING` / `CHECK_HEAD_MISMATCH`), and an incomplete exact review identity (repository, head, base, current main) is rejected. The report also records check-set stability against previously observed names.
+- GitHub installation rate-limit retry in `adapters/github_action.py` (Issue #45): `GitHubReadClient` performs bounded, header-aware retries (`Retry-After`, `X-RateLimit-Reset`, bounded wait with a fallback; defaults of 2 retries and 60 s maximum wait) on primary and secondary rate limits. Ordinary 403 responses remain fail-closed.
+- Advisory-unavailable evidence (Issue #49): when rate-limit retries are exhausted the Action emits a hash-bound `reviewer.repository_intelligence_unavailable.v1` bundle (`status=UNAVAILABLE`, `reason=RATE_LIMIT_EXHAUSTED`, `cfi_status=INSUFFICIENT_EVIDENCE`) with its own self-verification, step summary, and outputs instead of failing silently or reporting a false green. All other failures remain fail-closed.
+- New `knowledge` operation in `repository_intelligence/knowledge.py` (Issue #56): `analyze_knowledge_applicability` / `verify_knowledge_applicability_report` emit a `reviewer.knowledge_applicability.v1` report classifying repository-bound knowledge artifacts as `CURRENT`, `STALE_EXACT_SOURCE`, `AFFECTED_BY_COVERAGE`, or `UNKNOWN` from exact source changes and declared coverage, under the `REPOSITORY_KNOWLEDGE_APPLICABILITY_EVIDENCE_ONLY` ceiling. It never inspects or rewrites knowledge content.
+- New `guard-delta` operation in `repository_intelligence/guard_delta.py` (Issue #57): `analyze_guard_semantic_delta` / `verify_guard_semantic_delta_report` emit a `reviewer.guard_semantic_delta.v1` report classifying mechanically observable changes in normalized policy/gate structure as `TIGHTENS`, `LOOSENS`, `MIXED`, `UNCHANGED`, or `UNKNOWN`, under the `GUARD_SEMANTIC_DELTA_ADVISORY_EVIDENCE_ONLY` ceiling.
+- CLI projection of `knowledge` and `guard-delta` (Issue #60), with tests covering all projected operations.
 
 ### Changed
 
-- CLI now exposes eight operations (`facts` added); public verification surface adds `verify_structured_facts_report`.
-- The `facts` operation is not yet claimed live through Dev MCP; that projection requires a separate DevSpace cutover.
-- README documents the `facts` capability, its fail-closed behavior, and the `REPOSITORY_FACTS_ONLY` claim ceiling.
+- CLI now exposes eleven operations: `cfi`, `ci`, `eia`, `facts`, `guard-delta`, `impact`, `knowledge`, `overlap`, `query`, `readiness`, `revision`. The public verification surface adds `verify_structured_facts_report`, `verify_repository_query_evidence`, `verify_check_role_report`, `verify_knowledge_applicability_report`, and `verify_guard_semantic_delta_report`.
+- Repository governance adopts the Nexus Core v2 evidence contract in `.nexus-core/config.toml` (Issue #53): version 2 config with `pytest` (`test-result`) and `diff-check` (`static-check`) verifiers and a pinned v2 `nexus-certify`, plus the Issue-bound PR gate and trusted default-branch Core gate. These are repository governance changes and do not alter engine behavior.
+- Added the hybrid replication capture observer workflow and hardened its admission observer; retained terminal fleet dogfooding evidence (Issue #24).
+- README documents the eleven-operation capability table and check-role classification and pins release examples to `v0.1.3`; `pyproject.toml` version is `0.1.3`.
+- `facts`, `query`, `knowledge`, and `guard-delta` are not claimed live through Dev MCP; that projection requires a separate DevSpace cutover.
 
 ### Safety boundary
 
-- Structured facts describe code shape only and never grant approval, merge, release, worker dispatch, or production authority.
-- Stale or incomplete observation sets fail closed to `UNRESOLVED` rather than reporting a false green.
+- All new evidence is advisory and hash-bound. None of it grants approval, merge, release, worker dispatch, routing, Candidate acceptance, or production authority.
+- Structured facts describe code shape only; stale or incomplete observation sets fail closed to `UNRESOLVED`.
+- Empty retrieval is never proof of absence (`EMPTY_RETRIEVAL_NOT_ABSENCE`); stale/different-revision candidates, retriever-index substitution, duplicate candidate inflation, and dropped exact-match evidence are rejected by the verifier.
+- Check-role evidence does not infer repository required-check topology; roles come only from caller-supplied policy, and unbound or unclassifiable checks fail closed.
+- Rate-limit exhaustion yields `UNAVAILABLE` / `INSUFFICIENT_EVIDENCE` evidence, never a passing result.
+- This release changes documentation and version metadata only; no engine semantics or claim ceilings change in the release PR.
 
 ### Verification
 
-- Full test suite: 248 passed.
-
-## [Unreleased: Issue #29]
-
-### Added
-
-- New `query` operation emitting a `reviewer.repository_query_evidence.v1` report that narrows repository candidates for a query before any semantic review.
-- `RetrieverIdentityV1`, `RankedCandidateV1`, `RetrieverRunV1`, `FusedCandidateV1`, `RepositoryQueryEvidenceReportV1`, `CandidateMatchClass`, and `RepositoryQueryResolution` contracts plus the `REPOSITORY_QUERY_EVIDENCE_ONLY` claim ceiling.
-- `analyze_repository_query` fusion engine and `verify_repository_query_evidence` semantic verifier (recomputes index binding, candidate normalization, reciprocal-rank fusion with `k=60`, origin, resolution, and completeness from embedded neutral inputs).
-- `scripts/benchmark_retrieval.py` synthetic retrieval throughput benchmark.
-
-### Changed
-
-- CLI now exposes nine operations (`query` added); README documents the `query` capability, deterministic fusion, exact-match preservation, bounded candidate sets, and the fail-closed resolution ladder.
-
-### Safety boundary
-
-- Retrieval evidence is advisory and binding-less: a resolved query never grants routing, worker selection, merge, release, dispatch, or Candidate-acceptance authority.
-- Empty retrieval is never proof of absence (`EMPTY_RETRIEVAL_NOT_ABSENCE`); semantic review is flagged only for `AMBIGUOUS_RETRIEVAL` and `INSUFFICIENT_EVIDENCE`.
-- Stale/different-revision candidates, retriever-index substitution, duplicate candidate inflation, and exact-match evidence dropped by lower-confidence retrieval are rejected by the verifier.
-
-### Verification
-
-- Full test suite: 272 passed.
+- Full test suite: 344 passed (`python -m pytest -q`, Python 3.12).
 
 ## [0.1.2] - 2026-09-16
 
