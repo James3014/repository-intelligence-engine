@@ -315,3 +315,119 @@ def test_terminal_action_never_checks_out_or_executes_pull_request_code():
     assert "github_terminal.py" in text
     assert 'GITHUB_RUN_ID' in text
     assert 'RI_EXPECTED_HEAD_SHA' in text
+
+
+# --- terminal error envelope -------------------------------------------------
+
+
+def _run_main(monkeypatch, tmp_path, capsys, *, timeout="5", head=HEAD):
+    out = tmp_path / "nested" / "report.json"
+    monkeypatch.setenv("GITHUB_TOKEN", "x")
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    code = terminal.main(
+        [
+            "--repository", "owner/repo",
+            "--pr-number", "7",
+            "--expected-head-sha", head,
+            "--current-actions-run-id", "1234",
+            "--timeout-seconds", timeout,
+            "--poll-seconds", "1",
+            "--quiescence-seconds", "1",
+            "--output", str(out),
+        ]
+    )
+    return code, out, capsys.readouterr().err
+
+
+def _load_envelope(out):
+    import json
+
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+def test_timeout_writes_hash_bound_error_envelope(monkeypatch, tmp_path, capsys):
+    _patch_snapshots(monkeypatch, [_snapshot(checks=[_status(state="pending")])])
+    clock = FakeClock()
+    monkeypatch.setattr(terminal.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(terminal.time, "sleep", clock.sleep)
+    code, out, err = _run_main(monkeypatch, tmp_path, capsys, timeout="5")
+    assert code == 1
+    envelope = _load_envelope(out)
+    assert envelope["schema"] == terminal.TERMINAL_ERROR_SCHEMA
+    assert envelope["status"] == "ERROR"
+    assert envelope["error_class"] == "OBSERVATION_TIMEOUT"
+    assert envelope["claim_ceiling"] == gha.CLOUD_CLAIM_CEILING
+    assert envelope["expected_head_sha"] == HEAD
+    assert envelope["pr_number"] == 7
+    assert envelope["timeout_seconds"] == 5.0
+    assert terminal.verify_terminal_error_envelope(envelope)
+    assert envelope["content_sha256"] == gha._hash_payload(envelope)
+    assert "OBSERVATION_TIMEOUT" in err
+
+
+def test_error_envelope_hash_rejects_tamper(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(terminal, "collect_pr_snapshot", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    code, out, _ = _run_main(monkeypatch, tmp_path, capsys)
+    envelope = _load_envelope(out)
+    assert terminal.verify_terminal_error_envelope(envelope)
+    envelope["error_class"] = "OBSERVATION_TIMEOUT"
+    assert not terminal.verify_terminal_error_envelope(envelope)
+
+
+def test_rate_limit_error_is_classified(monkeypatch, tmp_path, capsys):
+    def boom(*a, **k):
+        raise RuntimeError("GitHub HTTP 403: API rate limit exceeded for installation")
+
+    monkeypatch.setattr(terminal, "collect_pr_snapshot", boom)
+    code, out, _ = _run_main(monkeypatch, tmp_path, capsys)
+    assert code == 1
+    envelope = _load_envelope(out)
+    assert envelope["error_class"] == "GITHUB_RATE_LIMITED"
+    assert "rate limit" in envelope["error"]
+    assert terminal.verify_terminal_error_envelope(envelope)
+
+
+def test_other_github_read_error_is_classified(monkeypatch, tmp_path, capsys):
+    def boom(*a, **k):
+        raise RuntimeError("GitHub HTTP 500: server error")
+
+    monkeypatch.setattr(terminal, "collect_pr_snapshot", boom)
+    code, out, _ = _run_main(monkeypatch, tmp_path, capsys)
+    assert code == 1
+    assert _load_envelope(out)["error_class"] == "GITHUB_READ_FAILED"
+
+
+def test_head_change_envelope(monkeypatch, tmp_path, capsys):
+    _patch_snapshots(monkeypatch, [_snapshot(checks=[_check()], head="f" * 40)])
+    code, out, _ = _run_main(monkeypatch, tmp_path, capsys)
+    assert code == 1
+    assert _load_envelope(out)["error_class"] == "HEAD_CHANGED"
+
+
+def test_invalid_input_envelope_and_bounded_message(monkeypatch, tmp_path, capsys):
+    code, out, _ = _run_main(monkeypatch, tmp_path, capsys, head="nothex")
+    assert code == 1
+    assert _load_envelope(out)["error_class"] == "INVALID_INPUT"
+    long_exc = RuntimeError("z" * 2000)
+    env = terminal.build_terminal_error_envelope(
+        long_exc, repository=None, pr_number=None, expected_head_sha=None,
+        timeout_seconds=None, poll_seconds=None, quiescence_seconds=None,
+    )
+    assert env["error_class"] == "UNKNOWN"
+    assert len(env["error"]) == terminal.MAX_ERROR_MESSAGE_CHARS
+
+
+def test_error_outputs_written_to_github_output(monkeypatch, tmp_path, capsys):
+    gh_out = tmp_path / "gh_output"
+    monkeypatch.setattr(terminal, "collect_pr_snapshot", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(gh_out))
+    monkeypatch.setenv("GITHUB_TOKEN", "x")
+    out = tmp_path / "r.json"
+    code = terminal.main(
+        ["--repository", "owner/repo", "--pr-number", "7", "--expected-head-sha", HEAD,
+         "--current-actions-run-id", "1", "--output", str(out)]
+    )
+    assert code == 1
+    text = gh_out.read_text()
+    assert f"report-path={out}" in text
+    assert f"content-sha256={_load_envelope(out)['content_sha256']}" in text
