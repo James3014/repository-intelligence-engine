@@ -4,6 +4,16 @@ All notable changes to Repository Intelligence Engine are documented here.
 
 The project follows semantic versioning while it remains in the `0.x` series. Immutable release tags are never moved after publication.
 
+## [Unreleased]
+
+### Added
+
+- Terminal observation failures now write a deterministic, hash-bound `reviewer.repository_intelligence_terminal_error.v1` envelope to the `--output` / `report-path` file (and set the `report-path` / `content-sha256` Action outputs) in addition to the existing stderr JSON and exit code 1. The envelope records `status=ERROR`, an `error_class` (`OBSERVATION_TIMEOUT`, `HEAD_CHANGED`, `GITHUB_RATE_LIMITED`, `GITHUB_READ_FAILED`, `INVALID_INPUT`, `UNKNOWN`), a bounded `error` message, the observation parameters, `observed_at`, and `content_sha256`. This lets consumers distinguish a genuine observation timeout from a GitHub read failure. Refs the terminal error-reporting gap.
+
+### Safety boundary
+
+- The error envelope is advisory evidence only under the existing `ADVISORY_EVIDENCE_ONLY` claim ceiling. The step still fails closed, the success bundle schema is unchanged, and no approval, merge, or release authority is granted.
+
 ## [0.1.3] - 2026-10-08
 
 ### Added

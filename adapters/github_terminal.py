@@ -35,7 +35,9 @@ from repository_intelligence.contracts import SUPPORTED_TERMINAL_FAILURES
 
 TERMINAL_SCHEMA = "reviewer.repository_intelligence_terminal_cloud.v1"
 TERMINAL_OBSERVATION_SCHEMA = "reviewer.repository_intelligence_terminal_observation.v1"
+TERMINAL_ERROR_SCHEMA = "reviewer.repository_intelligence_terminal_error.v1"
 TERMINAL_SNAPSHOT_SEMANTICS = "OBSERVED_CHECK_SET_TERMINAL_AFTER_QUIESCENCE"
+MAX_ERROR_MESSAGE_CHARS = 500
 TERMINAL_SUCCESS_STATES = frozenset({"success", "neutral", "skipped", "stale"})
 TERMINAL_CHECK_STATES = SUPPORTED_TERMINAL_FAILURES | TERMINAL_SUCCESS_STATES | frozenset({"startup_failure"})
 DEFAULT_TIMEOUT_SECONDS = 900.0
@@ -44,6 +46,88 @@ DEFAULT_QUIESCENCE_SECONDS = 20.0
 MAX_TIMEOUT_SECONDS = 3600.0
 MAX_POLL_SECONDS = 60.0
 MAX_QUIESCENCE_SECONDS = 300.0
+
+
+class TerminalObservationTimeout(RuntimeError):
+    """The bounded observation window elapsed before a stable terminal set."""
+
+
+class TerminalHeadChanged(RuntimeError):
+    """The pull-request head moved away from the expected head."""
+
+
+def classify_terminal_error(exc: BaseException) -> str:
+    """Map a failure to a stable advisory error class."""
+    if isinstance(exc, TerminalObservationTimeout):
+        return "OBSERVATION_TIMEOUT"
+    if isinstance(exc, TerminalHeadChanged):
+        return "HEAD_CHANGED"
+    if isinstance(exc, ValueError):
+        return "INVALID_INPUT"
+    if isinstance(exc, RuntimeError):
+        message = str(exc)
+        if message.startswith(("GitHub HTTP", "GitHub read failed", "RATE_LIMIT_EXHAUSTED", "GitHub ")):
+            if "rate limit" in message.casefold() or message.startswith("RATE_LIMIT_EXHAUSTED"):
+                return "GITHUB_RATE_LIMITED"
+            return "GITHUB_READ_FAILED"
+    return "UNKNOWN"
+
+
+def build_terminal_error_envelope(
+    exc: BaseException,
+    *,
+    repository: str | None,
+    pr_number: int | None,
+    expected_head_sha: str | None,
+    timeout_seconds: float | None,
+    poll_seconds: float | None,
+    quiescence_seconds: float | None,
+) -> dict[str, Any]:
+    envelope: dict[str, Any] = {
+        "schema": TERMINAL_ERROR_SCHEMA,
+        "status": "ERROR",
+        "error_class": classify_terminal_error(exc),
+        "error": str(exc)[:MAX_ERROR_MESSAGE_CHARS],
+        "claim_ceiling": CLOUD_CLAIM_CEILING,
+        "snapshot_semantics": TERMINAL_SNAPSHOT_SEMANTICS,
+        "repository": repository,
+        "pr_number": pr_number,
+        "expected_head_sha": expected_head_sha,
+        "timeout_seconds": timeout_seconds,
+        "poll_seconds": poll_seconds,
+        "quiescence_seconds": quiescence_seconds,
+        "observed_at": _utc_now(),
+        "content_sha256": "",
+    }
+    envelope["content_sha256"] = _hash_payload(envelope)
+    return envelope
+
+
+def verify_terminal_error_envelope(payload: Mapping[str, Any]) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    if payload.get("schema") != TERMINAL_ERROR_SCHEMA or payload.get("status") != "ERROR":
+        return False
+    if payload.get("claim_ceiling") != CLOUD_CLAIM_CEILING:
+        return False
+    if payload.get("snapshot_semantics") != TERMINAL_SNAPSHOT_SEMANTICS:
+        return False
+    supplied = payload.get("content_sha256")
+    return isinstance(supplied, str) and len(supplied) == 64 and supplied == _hash_payload(payload)
+
+
+def _write_error_outputs(envelope: Mapping[str, Any], path: str | None, report_path: str) -> None:
+    if not path:
+        return
+    values = {
+        "report-path": report_path,
+        "content-sha256": envelope["content_sha256"],
+        "claim-ceiling": envelope["claim_ceiling"],
+        "snapshot-semantics": envelope["snapshot_semantics"],
+    }
+    with open(path, "a", encoding="utf-8") as handle:
+        for key, value in values.items():
+            handle.write(f"{key}={value}\n")
 
 
 def _validate_head(value: str) -> str:
@@ -161,7 +245,7 @@ def wait_for_terminal_snapshot(
         snapshot = collect_pr_snapshot(api, repository, pr_number)
         observed_head = snapshot.get("head_sha")
         if not isinstance(observed_head, str) or observed_head.lower() != expected_head_sha:
-            raise RuntimeError("pull request head changed during terminal observation")
+            raise TerminalHeadChanged("pull request head changed during terminal observation")
 
         external, excluded_count = _external_checks(snapshot, current_actions_run_id)
         complete = snapshot.get("collection_complete") is True
@@ -206,7 +290,7 @@ def wait_for_terminal_snapshot(
 
         elapsed = now - started
         if elapsed >= timeout_seconds:
-            raise RuntimeError(
+            raise TerminalObservationTimeout(
                 "terminal observation timed out before a complete, non-empty, stable terminal external check set was observed"
             )
         sleep_fn(min(poll_seconds, max(0.0, timeout_seconds - elapsed)))
@@ -384,17 +468,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(bundle, sort_keys=True))
         return 0
     except Exception as exc:
-        print(
-            json.dumps(
-                {
-                    "status": "ERROR",
-                    "error": str(exc),
-                    "claim_ceiling": CLOUD_CLAIM_CEILING,
-                    "snapshot_semantics": TERMINAL_SNAPSHOT_SEMANTICS,
-                }
-            ),
-            file=sys.stderr,
+        envelope = build_terminal_error_envelope(
+            exc,
+            repository=args.repository or None,
+            pr_number=args.pr_number,
+            expected_head_sha=args.expected_head_sha,
+            timeout_seconds=args.timeout_seconds,
+            poll_seconds=args.poll_seconds,
+            quiescence_seconds=args.quiescence_seconds,
         )
+        try:
+            output = Path(args.output)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(json.dumps(envelope, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            _write_error_outputs(envelope, os.environ.get("GITHUB_OUTPUT"), str(output))
+        except OSError as write_exc:
+            print(f"failed to write terminal error envelope: {write_exc}", file=sys.stderr)
+        print(json.dumps(envelope, sort_keys=True), file=sys.stderr)
         return 1
 
 

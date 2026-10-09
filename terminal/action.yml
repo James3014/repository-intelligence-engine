@@ -84,5 +84,16 @@ runs:
         if [[ -n "$RI_PR_NUMBER" ]]; then
           args+=(--pr-number "$RI_PR_NUMBER")
         fi
+        set +e
         PYTHONPATH="$GITHUB_ACTION_PATH/..${PYTHONPATH:+:$PYTHONPATH}" \
           python3 "$GITHUB_ACTION_PATH/../adapters/github_terminal.py" "${args[@]}"
+        status=$?
+        set -e
+        if [[ "$status" -ne 0 ]]; then
+          # Fail closed, but expose the hash-bound error envelope when one was written.
+          if [[ -f "$RI_REPORT_PATH" ]]; then
+            echo "report-path=$RI_REPORT_PATH" >> "$GITHUB_OUTPUT"
+            echo "content-sha256=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["content_sha256"])' "$RI_REPORT_PATH" 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$status"
+        fi

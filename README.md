@@ -519,6 +519,8 @@ The terminal action:
 - emits hash-bound terminal evidence with `OBSERVED_CHECK_SET_TERMINAL_AFTER_QUIESCENCE`;
 - remains `ADVISORY_EVIDENCE_ONLY`. It does not infer which checks are required, and it does not grant Candidate acceptance or merge readiness.
 
+On failure the step still exits non-zero, but it also writes a hash-bound `reviewer.repository_intelligence_terminal_error.v1` envelope to `report-path` (and sets the `report-path` and `content-sha256` outputs). Its `error_class` (`OBSERVATION_TIMEOUT`, `HEAD_CHANGED`, `GITHUB_RATE_LIMITED`, `GITHUB_READ_FAILED`, `INVALID_INPUT`, `UNKNOWN`) lets consumers tell a genuine observation timeout from a GitHub read failure. It is advisory evidence only.
+
 ### B. CLI — easiest for local tools and pipelines
 
 Install directly from the immutable release tag:
