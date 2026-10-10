@@ -27,6 +27,8 @@ def classify(pr, authority_patterns=DEFAULT_AUTHORITY_PATTERNS):
         add("DRAFT")
     if pr.mergeable is False:
         add("NON_MERGEABLE")
+    if pr.mergeable is None:
+        add("MERGEABLE_UNKNOWN", "mergeable state not reported (evidence gap)")
     if (
         pr.do_not_merge
         or any(label.lower() in ("do-not-merge", "do not merge") for label in pr.labels)
@@ -60,6 +62,7 @@ def classify(pr, authority_patterns=DEFAULT_AUTHORITY_PATTERNS):
         "STALE_EVIDENCE",
         "DRAFT",
         "NON_MERGEABLE",
+        "MERGEABLE_UNKNOWN",
         "DO_NOT_MERGE",
         "STALE_LONG_LIVED",
         "COLLECTION_INCOMPLETE",
