@@ -139,9 +139,12 @@ def _coerce_snapshot(snapshot: PRSnapshot | Mapping[str, Any] | Any) -> PRSnapsh
             legacy_key = f"declared_{key}"
             if data.get(canonical_key) is not None:
                 data[legacy_key] = data[canonical_key]
+        # Keep the body for classification (DO_NOT_MERGE rule), but build the snapshot
+        # with an empty body so from_dict never parses declared SHAs out of prose.
+        body = data.get("body") if isinstance(data.get("body"), str) else ""
         data["body"] = ""
         main_sha = data.get("current_main_sha") or data.get("base_sha", "")
-        return PRSnapshot.from_dict(data, main=main_sha)
+        return replace(PRSnapshot.from_dict(data, main=main_sha), body=body)
     if all(hasattr(snapshot, name) for name in ("repository", "pr_number", "base_sha", "head_sha", "current_main_sha")):
         return snapshot
     raise TypeError("snapshot must be a PRSnapshot, mapping, or compatible object")
@@ -169,6 +172,7 @@ def _recompute_disposition(classification: Classification) -> None:
         "STALE_EVIDENCE",
         "DRAFT",
         "NON_MERGEABLE",
+        "MERGEABLE_UNKNOWN",
         "DO_NOT_MERGE",
         "STALE_LONG_LIVED",
         "COLLECTION_INCOMPLETE",
@@ -195,7 +199,7 @@ def _classify_snapshot(
     sanitized_labels = tuple(
         label for label in pr_snap.labels if label.lower() not in legacy_stale_labels
     )
-    core_snapshot = replace(pr_snap, body="", labels=sanitized_labels)
+    core_snapshot = replace(pr_snap, labels=sanitized_labels)
     classification = classify(
         core_snapshot,
         authority_patterns=tuple(policy.protected_path_patterns),
@@ -211,6 +215,9 @@ def _classify_snapshot(
     rev_id = revision_identity(pr_snap)
     gaps = list(rev_id.evidence_gaps)
     gaps.extend(str(error) for error in pr_snap.collection_errors)
+    mergeable_unknown = pr_snap.mergeable is None
+    if mergeable_unknown:
+        gaps.append("mergeable state unknown")
     if not rev_id.is_valid:
         if "INVALID_IDENTITY" not in classification.findings:
             classification.findings.append("INVALID_IDENTITY")
@@ -219,7 +226,7 @@ def _classify_snapshot(
         completeness = EvidenceCompleteness.INCOMPLETE
     elif not pr_snap.collection_complete:
         completeness = EvidenceCompleteness.INCOMPLETE
-    elif pr_snap.collection_errors:
+    elif pr_snap.collection_errors or mergeable_unknown:
         completeness = EvidenceCompleteness.PARTIAL
     else:
         completeness = EvidenceCompleteness.COMPLETE

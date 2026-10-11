@@ -466,6 +466,7 @@ def test_adapter_build_repository_intelligence_report() -> None:
         "current_main_sha": "main_sha",
         "changed_files": ["app/main.py"],
         "observed_at": "2026-08-30T12:00:00Z",
+        "mergeable": True,
     }
     pr2 = {
         "repository": "org/repo",
@@ -475,6 +476,7 @@ def test_adapter_build_repository_intelligence_report() -> None:
         "current_main_sha": "main_sha",
         "changed_files": ["app/utils.py"],
         "observed_at": "2026-08-30T12:01:00Z",
+        "mergeable": True,
     }
 
     report = ri.build_repository_intelligence_report([pr1, pr2])
