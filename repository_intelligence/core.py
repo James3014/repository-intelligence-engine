@@ -172,6 +172,7 @@ def _recompute_disposition(classification: Classification) -> None:
         "STALE_EVIDENCE",
         "DRAFT",
         "NON_MERGEABLE",
+        "MERGEABLE_UNKNOWN",
         "DO_NOT_MERGE",
         "STALE_LONG_LIVED",
         "COLLECTION_INCOMPLETE",
@@ -214,6 +215,9 @@ def _classify_snapshot(
     rev_id = revision_identity(pr_snap)
     gaps = list(rev_id.evidence_gaps)
     gaps.extend(str(error) for error in pr_snap.collection_errors)
+    mergeable_unknown = pr_snap.mergeable is None
+    if mergeable_unknown:
+        gaps.append("mergeable state unknown")
     if not rev_id.is_valid:
         if "INVALID_IDENTITY" not in classification.findings:
             classification.findings.append("INVALID_IDENTITY")
@@ -222,7 +226,7 @@ def _classify_snapshot(
         completeness = EvidenceCompleteness.INCOMPLETE
     elif not pr_snap.collection_complete:
         completeness = EvidenceCompleteness.INCOMPLETE
-    elif pr_snap.collection_errors:
+    elif pr_snap.collection_errors or mergeable_unknown:
         completeness = EvidenceCompleteness.PARTIAL
     else:
         completeness = EvidenceCompleteness.COMPLETE
