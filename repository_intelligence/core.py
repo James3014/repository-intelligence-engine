@@ -730,6 +730,43 @@ def build_repository_intelligence_report(
     return replace(report, content_sha256=_content_hash(report.to_dict()))
 
 
+_READINESS_STALE_KEYS = (
+    "stale_base",
+    "stale_declared_base",
+    "stale_declared_head",
+    "stale_declared_main",
+    "stale_evidence",
+)
+
+
+def readiness_item_is_coherent(item: Mapping[str, Any]) -> bool:
+    """Fail closed when a readiness item's REVIEW_READY claim is not derivable.
+
+    Re-derives ``is_review_ready`` exactly as ``RepositoryReadinessItem`` does and
+    rejects REVIEW_READY on an invalid or stale identity, so a re-hashed payload
+    cannot forge readiness.
+    """
+    identity = item.get("identity")
+    if not isinstance(identity, Mapping):
+        return False
+    is_valid = identity.get("is_valid")
+    completeness = item.get("evidence_completeness")
+    if not isinstance(is_valid, bool) or not isinstance(completeness, str):
+        return False
+    disposition = item.get("disposition")
+    expected = bool(
+        is_valid
+        and disposition == Disposition.REVIEW_READY.value
+        and completeness != EvidenceCompleteness.INCOMPLETE.value
+    )
+    if item.get("is_review_ready") is not expected:
+        return False
+    if disposition == Disposition.REVIEW_READY.value:
+        if not is_valid or any(identity.get(k) is not False for k in _READINESS_STALE_KEYS):
+            return False
+    return True
+
+
 def verify_repository_intelligence_report(payload: Mapping[str, Any]) -> bool:
     """Verify repository intelligence report schema and content hash.
 
@@ -853,6 +890,8 @@ def verify_repository_intelligence_report(payload: Mapping[str, Any]) -> bool:
             identity.get("current_main_sha"),
         ]
         if identity.get("review_identity") != expected_review_identity:
+            return False
+        if not readiness_item_is_coherent(item):
             return False
         if item.get("repository") != identity.get("repository"):
             return False

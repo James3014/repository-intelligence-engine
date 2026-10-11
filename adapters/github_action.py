@@ -27,6 +27,7 @@ from repository_intelligence import (
     verify_external_intelligence_automation_envelope,
 )
 from repository_intelligence.cli import execute_operation
+from repository_intelligence.core import readiness_item_is_coherent
 
 CLOUD_SCHEMA = "reviewer.repository_intelligence_cloud.v1"
 UNAVAILABLE_SCHEMA = "reviewer.repository_intelligence_unavailable.v1"
@@ -611,6 +612,8 @@ def verify_cloud_bundle(payload: Mapping[str, Any]) -> bool:
         result = reports[name]["result"]
         if not isinstance(result, Mapping) or not identity_consistent(result.get("identity")):
             return False
+    if not readiness_item_is_coherent(reports["readiness"]["result"]):
+        return False
 
     if not verify_ci_failure_intelligence_report(reports["cfi"]["result"]):
         return False
