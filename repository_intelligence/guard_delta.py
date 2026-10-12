@@ -6,14 +6,13 @@ structure without becoming a policy authority or semantic reviewer.
 from __future__ import annotations
 
 import fnmatch
-import hashlib
-import json
 import re
 from dataclasses import dataclass, replace
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
+from ._hashing import hash_payload as _hash_payload
 from .core import revision_identity
 
 
@@ -102,18 +101,6 @@ def _plain_guard(guard: Mapping[str, Any]) -> dict[str, Any]:
         "self_test_sha256": guard.get("self_test_sha256"),
         "wording_sha256": guard.get("wording_sha256"),
     }
-
-
-def _hash_payload(payload: Mapping[str, Any]) -> str:
-    unsigned = dict(payload)
-    unsigned.pop("content_sha256", None)
-    encoded = json.dumps(
-        unsigned,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _normalize_string_list(

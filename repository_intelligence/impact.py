@@ -12,15 +12,9 @@ import posixpath
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
+from ._hashing import content_hash as _content_hash
 from .contracts import CLAIM_CEILING, ChangeImpactReportV1, EvidenceCompleteness
 from .core import revision_identity
-
-
-def _content_hash(payload: Mapping[str, Any]) -> str:
-    unsigned = dict(payload)
-    unsigned.pop("content_sha256", None)
-    canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _graph_hash(

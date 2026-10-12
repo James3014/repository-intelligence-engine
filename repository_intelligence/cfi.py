@@ -11,6 +11,7 @@ import json
 from dataclasses import replace
 from typing import Any, Mapping
 
+from ._hashing import content_hash as _content_hash
 from .contracts import (
     CI_EVIDENCE_CLAIM_CEILING,
     TERMINAL_FAILURE_STATUSES,
@@ -20,13 +21,6 @@ from .contracts import (
     EvidenceCompleteness,
 )
 from .core import fingerprint_ci_failures, verify_ci_failure_evidence
-
-
-def _content_hash(payload: Mapping[str, Any]) -> str:
-    unsigned = dict(payload)
-    unsigned.pop("content_sha256", None)
-    canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _expected_reason_codes(status: CIFailureTriageStatus) -> tuple[str, ...]:

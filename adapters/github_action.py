@@ -7,7 +7,6 @@ GitHub state, comments, approves, merges, or dispatches workers.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -26,6 +25,7 @@ from repository_intelligence import (
     verify_ci_failure_intelligence_report,
     verify_external_intelligence_automation_envelope,
 )
+from repository_intelligence._hashing import hash_payload as _hash_payload
 from repository_intelligence.cli import execute_operation
 from repository_intelligence.core import readiness_item_is_coherent
 
@@ -449,14 +449,6 @@ def collect_pr_snapshot(api: GitHubReadAPI, repository: str, pr_number: int) -> 
         "updated_at": str(pr.get("updated_at") or ""),
     }
     return snapshot
-
-
-def _hash_payload(payload: Mapping[str, Any]) -> str:
-    unsigned = dict(payload)
-    unsigned.pop("content_sha256", None)
-    canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
 
 
 def run_unavailable_bundle(

@@ -11,6 +11,7 @@ import json
 from dataclasses import replace
 from typing import Any, Mapping
 
+from ._hashing import content_hash as _content_hash
 from .cfi import analyze_ci_failure_intelligence, verify_ci_failure_intelligence_report
 from .contracts import (
     CIFailureTriageStatus,
@@ -20,13 +21,6 @@ from .contracts import (
 )
 
 AUTOMATION_CLAIM_CEILING = "AUTOMATION_ADVISORY_ONLY"
-
-
-def _content_hash(payload: Mapping[str, Any]) -> str:
-    unsigned = dict(payload)
-    unsigned.pop("content_sha256", None)
-    canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _idempotency_key(identity: tuple[str, int, str, str, str], action_kind: str, evidence_ref: str) -> str:
