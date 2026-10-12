@@ -9,14 +9,13 @@ This module is advisory-only. It never inspects or rewrites knowledge content.
 from __future__ import annotations
 
 import fnmatch
-import hashlib
-import json
 import re
 from dataclasses import dataclass, replace
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
+from ._hashing import hash_payload as _hash_payload
 from .core import revision_identity
 
 
@@ -115,18 +114,6 @@ class KnowledgeApplicabilityReportV1:
             "claim_ceiling": self.claim_ceiling,
             "content_sha256": self.content_sha256,
         }
-
-
-def _hash_payload(payload: Mapping[str, Any]) -> str:
-    unsigned = dict(payload)
-    unsigned.pop("content_sha256", None)
-    encoded = json.dumps(
-        unsigned,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _normalise_artifacts(

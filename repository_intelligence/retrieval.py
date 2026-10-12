@@ -20,6 +20,7 @@ import posixpath
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
+from ._hashing import content_hash as _content_hash
 from .contracts import (
     FUSION_POLICY_RRF_K60_WEIGHTED,
     REPOSITORY_QUERY_CLAIM_CEILING,
@@ -100,13 +101,6 @@ def _canonical_source_evidence(data: Mapping[str, Any]) -> dict[str, Any]:
         return json.loads(json.dumps(data, sort_keys=True, separators=(",", ":")))
     except (TypeError, ValueError) as exc:
         raise TypeError("repository query input must be JSON-serializable") from exc
-
-
-def _content_hash(payload: Mapping[str, Any]) -> str:
-    unsigned = dict(payload)
-    unsigned.pop("content_sha256", None)
-    canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _normalize_path(value: Any) -> tuple[str | None, str | None]:
