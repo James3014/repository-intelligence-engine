@@ -82,6 +82,9 @@ class FakeGitHubAPI:
             if params and params.get("page") == 1:
                 return self.commit_statuses
             return []
+        if path == "/repos/owner/repo/actions/runs":
+            # Issue #98: workflow identity for check suites on the head.
+            return {"workflow_runs": []}
         raise AssertionError(f"unexpected API call: {path} {params}")
 
 

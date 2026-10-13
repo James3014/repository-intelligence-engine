@@ -38,6 +38,10 @@ class CheckObservation:
     artifact_sha256: str | None = None
     artifact_truncated: bool = False
     run_attempt: int | None = None
+    # Workflow identity (GitHub Actions workflow id / file path) of the check
+    # run's suite. Supersession requires the same name, app, and workflow.
+    workflow_id: int | None = None
+    workflow_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,11 @@ class PRSnapshot:
     collection_errors: tuple[str, ...] = ()
     created_at: str = ""
     updated_at: str = ""
+    # "RESOLVED": GitHub resolved a merge-base with current main (the API
+    # cannot prove uniqueness); "NONE": GitHub reports no common ancestor;
+    # anything else (including None / "UNKNOWN"): the lookup did not succeed.
+    merge_base_status: str | None = None
+    self_check_suite_ids: tuple[int, ...] = ()
 
     @classmethod
     def from_dict(cls, d: dict[str, Any], main: str):
@@ -112,6 +121,16 @@ class PRSnapshot:
             tuple(d.get("collection_errors", [])),
             d.get("created_at", ""),
             d.get("updated_at", ""),
+            merge_base_status=(
+                d.get("merge_base_status")
+                if isinstance(d.get("merge_base_status"), str)
+                else None
+            ),
+            self_check_suite_ids=tuple(
+                item
+                for item in (d.get("self_check_suite_ids") or ())
+                if isinstance(item, int) and not isinstance(item, bool)
+            ),
         )
 
 

@@ -91,8 +91,9 @@ DevSpace can project the same engine through MCP, but DevSpace is a **consumer a
 | `query` | "Which repository candidates should be narrowed toward this query?" | emits a bounded, deterministically fused candidate set with exact-match preservation, before any semantic review | `REPOSITORY_QUERY_EVIDENCE_ONLY` |
 | `knowledge` | "Are repository-bound knowledge artifacts still applicable to this change?" | classifies artifacts as `CURRENT`, `STALE_EXACT_SOURCE`, `AFFECTED_BY_COVERAGE`, or `UNKNOWN` from exact source changes and declared coverage (`reviewer.knowledge_applicability.v1`) | `REPOSITORY_KNOWLEDGE_APPLICABILITY_EVIDENCE_ONLY` |
 | `guard-delta` | "Did this change tighten or loosen a guard / policy?" | classifies normalized guard structure changes as `TIGHTENS`, `LOOSENS`, `MIXED`, `UNCHANGED`, or `UNKNOWN` (`reviewer.guard_semantic_delta.v1`) | `GUARD_SEMANTIC_DELTA_ADVISORY_EVIDENCE_ONLY` |
+| `systemic` | "Is the same check failing on many open PRs at once?" | reports check names whose latest run is a terminal failure (not `cancelled`) on at least 3 open PRs within 24 hours (`reviewer.systemic_ci_failures.v1`); thresholds are caller-configurable | `CI_EVIDENCE_ONLY` |
 
-The CLI exposes all eleven operations: `cfi`, `ci`, `eia`, `facts`, `guard-delta`, `impact`, `knowledge`, `overlap`, `query`, `readiness`, `revision`. Report schemas: `ci` is `reviewer.ci_failure_evidence.v1`, `impact` is `reviewer.change_impact.v1`, `cfi` is `reviewer.ci_failure_intelligence.v1`, `eia` is `reviewer.external_intelligence_automation.v1`, `facts` is `reviewer.structured_facts.v1`, `query` is `reviewer.repository_query_evidence.v1`, `knowledge` is `reviewer.knowledge_applicability.v1`, and `guard-delta` is `reviewer.guard_semantic_delta.v1`. A task-aware query extension (`reviewer.task_aware_repository_query_evidence.v1`, ceiling `TASK_AWARE_REPOSITORY_QUERY_EVIDENCE_SHADOW_ONLY`) is available as a Python API in `repository_intelligence.retrieval` and is not a separate CLI operation.
+The CLI exposes twelve operations: `cfi`, `ci`, `eia`, `facts`, `guard-delta`, `impact`, `knowledge`, `overlap`, `query`, `readiness`, `revision`, `systemic` (added after `v0.1.4`; see CHANGELOG). Report schemas: `ci` is `reviewer.ci_failure_evidence.v1`, `impact` is `reviewer.change_impact.v1`, `cfi` is `reviewer.ci_failure_intelligence.v1`, `eia` is `reviewer.external_intelligence_automation.v1`, `facts` is `reviewer.structured_facts.v1`, `query` is `reviewer.repository_query_evidence.v1`, `knowledge` is `reviewer.knowledge_applicability.v1`, and `guard-delta` is `reviewer.guard_semantic_delta.v1`. A task-aware query extension (`reviewer.task_aware_repository_query_evidence.v1`, ceiling `TASK_AWARE_REPOSITORY_QUERY_EVIDENCE_SHADOW_ONLY`) is available as a Python API in `repository_intelligence.retrieval` and is not a separate CLI operation.
 
 ### Check-role classification
 
@@ -556,6 +557,7 @@ facts
 query
 knowledge
 guard-delta
+systemic
 ```
 
 Example:

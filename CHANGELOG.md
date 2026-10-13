@@ -4,6 +4,25 @@ All notable changes to Repository Intelligence Engine are documented here.
 
 The project follows semantic versioning while it remains in the `0.x` series. Immutable release tags are never moved after publication.
 
+## [0.1.5] - Unreleased (tag after merge)
+
+Signal-quality release for consumers that surface Repository Intelligence to humans (Issue #98).
+
+### Changed
+
+- CFI no longer counts a `cancelled` check run as a failure when a strictly newer run of the same check exists on the same PR head (`SUPERSEDED_CANCELLED`). "Same check" means the same name, the same app (`app_slug`), and the same workflow (`workflow_id`), with a check-run id on both runs; there is no timestamp fallback, so commit statuses never supersede or get superseded. Checks whose check suite is a caller-declared run of the Repository Intelligence workflow itself are ignored too (`SELF_WORKFLOW`, snapshot key `self_check_suite_ids`). Ignored checks are recorded in `reviewer.ci_failure_evidence.v1` as `ignored_checks`; the verifier rejects entries whose reason does not follow from their own fields (a superseded entry needs a check-run id, app, workflow id, and a greater superseding id). A failure followed by a passing re-run is still counted. Readiness `UNEXPECTED_FAILURE` uses the same effective check set.
+- `STALE_BASE` (base behind current main) is now informational: it no longer makes readiness `STALE` and no longer bars `REVIEW_READY`. Freshness belongs to the consumer's merge gate. Snapshot key `merge_base_status` is `RESOLVED`, `NONE`, or `UNKNOWN`: `NONE` adds the blocker `NO_UNIQUE_MERGE_BASE` (readiness `STALE`); when the base is behind main and the status is not `RESOLVED`, an informational `MERGE_BASE_UNKNOWN` finding and an evidence gap are recorded. Revision identity gains `no_unique_merge_base`; readiness coherence verification rejects re-hashed `REVIEW_READY` when it is true, and items without the field keep the previous fresh-base rule.
+- The GitHub Action adapter acquires `merge_base_status` (compare API; `RESOLVED` when GitHub returns a merge-base, which the API cannot prove unique; `NONE` only on "No common ancestor"; `UNKNOWN` otherwise) and, from one `actions/runs?head_sha=` listing, each check run's `workflow_id` / `workflow_path` plus `self_check_suite_ids` (this workflow's runs for the head). These lookups are best-effort and cannot make collection incomplete; without them nothing is superseded or ignored.
+- `pyproject.toml` version is `0.1.5`. README pins stay on `v0.1.4` until the `v0.1.5` tag is published.
+
+### Added
+
+- New `systemic` operation (`reviewer.systemic_ci_failures.v1`, `CI_EVIDENCE_ONLY`). A check is keyed by `(workflow_path, name)`, so equally named jobs in different workflows are never merged. Per check, a cutoff is the later of the newest success of that check on any open PR or in `main_checks`, and the newest main change to its workflow file (`workflow_changed_at`). A check is reported when its latest run is a terminal failure other than `cancelled`/`action_required`, completed after the cutoff and within `window_hours` (default 24) of `observed_at`, on at least `min_pull_requests` (default 3) open PRs. Cutoffs and per-PR failing keys are embedded; `verify_systemic_failure_report` re-derives the result.
+
+### Safety boundary
+
+- All outputs remain advisory under unchanged claim ceilings. No approval, merge, release, or dispatch authority is added.
+
 ## [0.1.4] - 2026-10-11
 
 `v0.1.3` was never published as a release tag (the tag name was consumed by an immutable release that was created and deleted by mistake), so this is the first immutable tag that includes the `0.1.3` content below.

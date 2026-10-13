@@ -15,8 +15,15 @@ def classify(pr, authority_patterns=DEFAULT_AUTHORITY_PATTERNS):
         classification.findings.append(finding)
         classification.reasons.append(reason or finding)
 
+    # A base behind main is informational only: freshness is owned by the
+    # consumer's merge gate. Only a proven missing unique merge-base blocks.
     if pr.base_sha != pr.current_main_sha:
         add("STALE_BASE")
+    merge_base_status = getattr(pr, "merge_base_status", None)
+    if merge_base_status == "NONE":
+        add("NO_UNIQUE_MERGE_BASE", "no unique merge-base with current main")
+    elif pr.base_sha != pr.current_main_sha and merge_base_status != "RESOLVED":
+        add("MERGE_BASE_UNKNOWN", "merge-base with current main unknown (informational)")
     if (
         (pr.declared_base_sha and pr.declared_base_sha != pr.base_sha)
         or (pr.declared_head_sha and pr.declared_head_sha != pr.head_sha)
@@ -58,7 +65,7 @@ def classify(pr, authority_patterns=DEFAULT_AUTHORITY_PATTERNS):
         add("COLLECTION_INCOMPLETE")
 
     blockers = {
-        "STALE_BASE",
+        "NO_UNIQUE_MERGE_BASE",
         "STALE_EVIDENCE",
         "DRAFT",
         "NON_MERGEABLE",
@@ -75,7 +82,7 @@ def classify(pr, authority_patterns=DEFAULT_AUTHORITY_PATTERNS):
         classification.disposition = Disposition.EXCLUDED
     elif (
         "STALE_LONG_LIVED" in classification.findings
-        or "STALE_BASE" in classification.findings
+        or "NO_UNIQUE_MERGE_BASE" in classification.findings
         or "STALE_EVIDENCE" in classification.findings
     ):
         classification.disposition = Disposition.STALE

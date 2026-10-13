@@ -98,6 +98,10 @@ class RevisionIdentity:
     stale_evidence: bool = False
     evidence_gaps: tuple[str, ...] = ()
     is_valid: bool = True
+    # True only when acquisition proved the PR head has no unique merge-base
+    # with current main. A base that is merely behind main is informational
+    # (``stale_base``); only this condition blocks REVIEW_READY.
+    no_unique_merge_base: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.evidence_gaps, tuple):
@@ -128,6 +132,7 @@ class RevisionIdentity:
             "stale_declared_head": self.stale_declared_head,
             "stale_declared_main": self.stale_declared_main,
             "stale_evidence": self.stale_evidence,
+            "no_unique_merge_base": self.no_unique_merge_base,
             "review_identity": list(self.review_identity),
             "evidence_gaps": list(self.evidence_gaps),
             "is_valid": self.is_valid,
@@ -302,6 +307,12 @@ class CIFailureFingerprint:
     expected_run_id: int | None = None
     expected_job_identity: str | None = None
     expected_artifact_identity: str | None = None
+    # Checks excluded from failure counting, each with a derivable reason:
+    # SUPERSEDED_CANCELLED (a newer run of the same check exists on the same
+    # head) or SELF_WORKFLOW (the check suite is a caller-declared run of the
+    # Repository Intelligence workflow itself).
+    ignored_checks: tuple[Mapping[str, Any], ...] = ()
+    self_check_suite_ids: tuple[int, ...] = ()
     schema: str = "reviewer.ci_failure_evidence.v1"
     claim_ceiling: str = CI_EVIDENCE_CLAIM_CEILING
 
@@ -329,7 +340,9 @@ class CIFailureFingerprint:
             "expected_run_id": self.expected_run_id,
             "expected_job_identity": self.expected_job_identity,
             "expected_artifact_identity": self.expected_artifact_identity,
-"evidence_gaps": list(self.evidence_gaps),
+            "ignored_checks": [dict(check) for check in self.ignored_checks],
+            "self_check_suite_ids": list(self.self_check_suite_ids),
+            "evidence_gaps": list(self.evidence_gaps),
             "evidence_completeness": self.evidence_completeness.value,
             "is_complete": self.is_complete,
             "claim_ceiling": self.claim_ceiling,

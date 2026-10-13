@@ -181,10 +181,16 @@ def _validate_repo(repo: str) -> str:
 
 
 
-def _paginate_list(api: GitHubReadAPI, path: str, *, key: str | None = None) -> list[Mapping[str, Any]]:
+def _paginate_list(
+    api: GitHubReadAPI,
+    path: str,
+    *,
+    key: str | None = None,
+    params: Mapping[str, Any] | None = None,
+) -> list[Mapping[str, Any]]:
     out: list[Mapping[str, Any]] = []
     for page in range(1, DEFAULT_MAX_PAGES + 1):
-        value = api.get_json(path, {"per_page": 100, "page": page})
+        value = api.get_json(path, {**(params or {}), "per_page": 100, "page": page})
         rows = value.get(key) if key is not None and isinstance(value, Mapping) else value
         if not isinstance(rows, list):
             raise RuntimeError(f"GitHub pagination shape invalid for {path}")
@@ -249,7 +255,80 @@ def _status_url_matches_subject(
     )
 
 
-def collect_pr_snapshot(api: GitHubReadAPI, repository: str, pr_number: int) -> dict[str, Any]:
+MERGE_BASE_RESOLVED = "RESOLVED"
+MERGE_BASE_NONE = "NONE"
+MERGE_BASE_UNKNOWN = "UNKNOWN"
+
+
+def _resolve_merge_base_status(
+    api: GitHubReadAPI, prefix: str, base_sha: str, head_sha: str, current_main_sha: str
+) -> str:
+    """Best-effort merge-base acquisition; the engine decides what it means.
+
+    ``RESOLVED`` means GitHub returned a merge-base (the API cannot prove it is
+    unique), ``NONE`` means GitHub answered 404 "No common ancestor", and any
+    other outcome is ``UNKNOWN``. Never a collection error.
+    """
+    if base_sha == current_main_sha:
+        return MERGE_BASE_RESOLVED
+    quote = urllib.parse.quote
+    path = f"{prefix}/compare/{quote(current_main_sha, safe='')}...{quote(head_sha, safe='')}"
+    try:
+        value = api.get_json(path)
+    except RuntimeError as exc:
+        message = str(exc)
+        if message.startswith("GitHub HTTP 404") and "no common ancestor" in message.lower():
+            return MERGE_BASE_NONE
+        return MERGE_BASE_UNKNOWN
+    merge_base = value.get("merge_base_commit") if isinstance(value, Mapping) else None
+    sha = merge_base.get("sha") if isinstance(merge_base, Mapping) else None
+    return MERGE_BASE_RESOLVED if isinstance(sha, str) and sha else MERGE_BASE_UNKNOWN
+
+
+def _strict_positive_int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _resolve_workflow_runs(
+    api: GitHubReadAPI, prefix: str, head_sha: str, self_run_id: int | None
+) -> tuple[dict[int, tuple[int, str | None]], list[int]]:
+    """Best-effort workflow identity for every Actions check suite on the head.
+
+    One listing (``/actions/runs?head_sha=``) yields ``check_suite_id ->
+    (workflow_id, workflow path)`` and, when ``self_run_id`` is in it, the check
+    suites of this workflow's own runs. Failure leaves both empty (the engine
+    then supersedes nothing and ignores no self checks).
+    """
+    try:
+        rows = _paginate_list(
+            api, f"{prefix}/actions/runs", key="workflow_runs", params={"head_sha": head_sha}
+        )
+    except RuntimeError:
+        return {}, []
+    suites: dict[int, tuple[int, str | None]] = {}
+    own_workflow: int | None = None
+    for row in rows:
+        if row.get("head_sha") != head_sha:
+            continue
+        suite = _strict_positive_int(row.get("check_suite_id"))
+        workflow_id = _strict_positive_int(row.get("workflow_id"))
+        if suite is None or workflow_id is None:
+            continue
+        path = row.get("path") if isinstance(row.get("path"), str) else None
+        suites[suite] = (workflow_id, path)
+        if self_run_id is not None and row.get("id") == self_run_id:
+            own_workflow = workflow_id
+    self_suites = sorted(suite for suite, (wf, _) in suites.items() if wf == own_workflow)
+    return suites, self_suites
+
+
+def collect_pr_snapshot(
+    api: GitHubReadAPI,
+    repository: str,
+    pr_number: int,
+    *,
+    self_run_id: int | None = None,
+) -> dict[str, Any]:
     """Collect one normalized PR snapshot without reading or executing PR file content."""
     repository = _validate_repo(repository)
     if not isinstance(pr_number, int) or pr_number <= 0:
@@ -300,6 +379,8 @@ def collect_pr_snapshot(api: GitHubReadAPI, repository: str, pr_number: int) -> 
         else:
             collection_errors.append("changed_files: missing filename")
 
+    workflow_suites, self_suites = _resolve_workflow_runs(api, prefix, head_sha, self_run_id)
+
     checks: list[dict[str, Any]] = []
     for row in check_rows:
         name = row.get("name")
@@ -332,6 +413,9 @@ def collect_pr_snapshot(api: GitHubReadAPI, repository: str, pr_number: int) -> 
             "annotation_count": output.get("annotations_count"),
             "app_slug": app.get("slug"),
         }
+        suite_id = _strict_positive_int(check_suite.get("id"))
+        if suite_id is not None and suite_id in workflow_suites:
+            optional["workflow_id"], optional["workflow_path"] = workflow_suites[suite_id]
         for key, value in optional.items():
             if value is not None:
                 check[key] = value
@@ -447,6 +531,10 @@ def collect_pr_snapshot(api: GitHubReadAPI, repository: str, pr_number: int) -> 
         "collection_errors": collection_errors,
         "created_at": str(pr.get("created_at") or ""),
         "updated_at": str(pr.get("updated_at") or ""),
+        "merge_base_status": _resolve_merge_base_status(
+            api, prefix, base_sha, head_sha, current_main_sha
+        ),
+        "self_check_suite_ids": self_suites,
     }
     return snapshot
 
@@ -715,7 +803,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         output = Path(args.output)
         try:
             api = GitHubReadClient(token, api_url=os.environ.get("GITHUB_API_URL", DEFAULT_API_URL))
-            snapshot = collect_pr_snapshot(api, repository, pr_number)
+            run_id_raw = os.environ.get("GITHUB_RUN_ID", "")
+            snapshot = collect_pr_snapshot(
+                api,
+                repository,
+                pr_number,
+                self_run_id=int(run_id_raw) if run_id_raw.isdigit() else None,
+            )
             bundle = run_cloud_bundle(snapshot)
             if not verify_cloud_bundle(bundle):
                 raise RuntimeError("cloud bundle failed self-verification")
