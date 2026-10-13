@@ -256,8 +256,9 @@ def test_same_job_name_in_different_workflows_is_not_merged():
     assert _report(_prs(*rows)).systemic_failures == ()
 
 
-def test_newer_success_on_another_open_pr_sets_the_cutoff():
-    rows = [*FAILS, (4, [_run("controller", "success", 40, "2026-10-13T04:00:00Z")])]
+def test_newer_successes_on_two_open_prs_set_the_cutoff():
+    rows = [*FAILS, (4, [_run("controller", "success", 40, "2026-10-13T04:00:00Z")]),
+            (5, [_run("controller", "success", 50, "2026-10-13T04:01:00Z")])]
     assert _report(_prs(*rows)).systemic_failures == ()
 
 
@@ -288,3 +289,98 @@ def test_cutoffs_are_embedded_and_verified():
     forged["systemic_failures"][0]["workflow_path"] = ".github/workflows/other.yml"
     forged["content_sha256"] = content_hash(forged)
     assert verify_systemic_failure_report(forged) is False
+
+
+# --- F1: cutoff needs main evidence or >= 2 distinct open-PR successes ---------------
+
+def test_single_open_pr_success_does_not_set_the_cutoff():
+    rows = [*FAILS, (4, [_run("controller", "success", 40, "2026-10-13T04:00:00Z")])]
+    report = _report(_prs(*rows))
+    assert [s.check_name for s in report.systemic_failures] == ["controller"]
+
+
+def test_two_open_pr_successes_set_the_cutoff_and_are_reported():
+    rows = [
+        *FAILS,
+        (4, [_run("controller", "success", 40, "2026-10-13T04:00:00Z")]),
+        (5, [_run("controller", "success", 50, "2026-10-13T04:10:00Z")]),
+    ]
+    report = _report(_prs(*rows))
+    assert report.systemic_failures == ()
+    payload = report.to_dict()
+    assert payload["suppressed_by_cutoff"] == 3
+    assert "3 failures suppressed by cutoff" in payload["notes"]
+    assert verify_systemic_failure_report(payload) is True
+
+
+def test_failure_between_two_successes_is_suppressed_only_when_two_succeed_after_it():
+    rows = [
+        (4, [_run("controller", "success", 40, "2026-10-13T02:00:00Z")]),
+        *FAILS,  # failures at 03:00
+        (5, [_run("controller", "success", 50, "2026-10-13T04:00:00Z")]),
+    ]
+    # only one success after the failures -> still systemic
+    assert [s.check_name for s in _report(_prs(*rows)).systemic_failures] == ["controller"]
+
+
+def test_silent_result_has_no_suppression_note():
+    payload = _report(_prs(*FAILS)).to_dict()
+    assert payload["suppressed_by_cutoff"] == 0
+    assert payload["notes"] == []
+
+
+def test_forged_suppression_count_fails_verification():
+    rows = [*FAILS, (4, [_run("controller", "success", 40, "2026-10-13T04:00:00Z")]),
+            (5, [_run("controller", "success", 50, "2026-10-13T04:10:00Z")])]
+    forged = copy.deepcopy(_report(_prs(*rows)).to_dict())
+    forged["suppressed_by_cutoff"] = -1
+    forged["content_sha256"] = content_hash(forged)
+    assert verify_systemic_failure_report(forged) is False
+
+
+# --- F2: checks without a workflow path are keyed by app/context ---------------------
+
+def _status(name, status, run_id, completed, app=None):
+    check = {"name": name, "status": status, "check_run_id": run_id, "completed_at": completed}
+    if app:
+        check["app_slug"] = app
+    return check
+
+
+def test_pathless_checks_from_different_apps_are_not_merged():
+    rows = [
+        (1, [_status("build", "failure", 1, "2026-10-13T03:00:00Z", "app-a")]),
+        (2, [_status("build", "failure", 2, "2026-10-13T03:00:00Z", "app-b")]),
+        (3, [_status("build", "failure", 3, "2026-10-13T03:00:00Z", "app-c")]),
+    ]
+    assert _report(_prs(*rows)).systemic_failures == ()
+
+
+def test_pathless_same_app_failures_are_still_systemic():
+    rows = [(n, [_status("build", "failure", n, "2026-10-13T03:00:00Z", "app-a")]) for n in (1, 2, 3)]
+    (item,) = _report(_prs(*rows)).to_dict()["systemic_failures"]
+    assert item["check_name"] == "build" and item["workflow_path"] == "app:app-a"
+
+
+def test_success_of_unrelated_status_does_not_clear_workflow_failure():
+    main = [_status("controller", "success", 99, "2026-10-13T04:00:00Z", "other-app")]
+    assert [s.check_name for s in _report(_prs(*FAILS), main_checks=main).systemic_failures] == ["controller"]
+
+
+def test_status_without_app_uses_status_namespace():
+    rows = [(n, [_status("ci/ctx", "failure", n, "2026-10-13T03:00:00Z")]) for n in (1, 2, 3)]
+    (item,) = _report(_prs(*rows)).to_dict()["systemic_failures"]
+    assert item["workflow_path"] == "status"
+
+
+# --- F3: unexpected_count must match unexpected_failures -----------------------------
+
+def test_ci_evidence_with_inconsistent_unexpected_count_fails_verification():
+    evidence = ri.fingerprint_ci_failures(
+        _snapshot([_check("lint", "failure", 5)])
+    ).to_dict()
+    assert evidence["unexpected_failures"] and ri.verify_ci_failure_evidence(evidence) is True
+    forged = copy.deepcopy(evidence)
+    forged["unexpected_count"] = len(forged["unexpected_failures"]) + 1
+    forged["content_sha256"] = content_hash(forged)  # re-hashed forgery
+    assert ri.verify_ci_failure_evidence(forged) is False

@@ -826,6 +826,8 @@ def verify_ci_failure_evidence(payload: Mapping[str, Any]) -> bool:
     for failures, should_be_unexpected in failure_groups:
         if not isinstance(failures, list):
             return False
+        if payload.get("unexpected_count" if should_be_unexpected else "expected_count") != len(failures):
+            return False
         for check in failures:
             if not isinstance(check, Mapping):
                 return False
