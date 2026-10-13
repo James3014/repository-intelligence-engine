@@ -71,6 +71,7 @@ def revision_identity(snapshot: PRSnapshot | Mapping[str, Any] | Any) -> Revisio
         declared_base = snapshot.declared_base_sha
         declared_head = snapshot.declared_head_sha
         declared_main = snapshot.declared_main_sha
+        merge_base_unique = snapshot.merge_base_unique
     elif isinstance(snapshot, Mapping):
         repository = snapshot.get("repository", "")
         pr_number = snapshot.get("pr_number", 0)
@@ -80,6 +81,7 @@ def revision_identity(snapshot: PRSnapshot | Mapping[str, Any] | Any) -> Revisio
         declared_base = snapshot.get("declared_base_sha") or snapshot.get("declared_base")
         declared_head = snapshot.get("declared_head_sha") or snapshot.get("declared_head")
         declared_main = snapshot.get("declared_main_sha") or snapshot.get("declared_main")
+        merge_base_unique = snapshot.get("merge_base_unique")
     else:
         repository = getattr(snapshot, "repository", "")
         pr_number = getattr(snapshot, "pr_number", 0)
@@ -89,6 +91,7 @@ def revision_identity(snapshot: PRSnapshot | Mapping[str, Any] | Any) -> Revisio
         declared_base = getattr(snapshot, "declared_base_sha", None) or getattr(snapshot, "declared_base", None)
         declared_head = getattr(snapshot, "declared_head_sha", None) or getattr(snapshot, "declared_head", None)
         declared_main = getattr(snapshot, "declared_main_sha", None) or getattr(snapshot, "declared_main", None)
+        merge_base_unique = getattr(snapshot, "merge_base_unique", None)
 
     if not _validate_repo_format(repository):
         gaps.append("repository domain or format invalid")
@@ -125,6 +128,7 @@ def revision_identity(snapshot: PRSnapshot | Mapping[str, Any] | Any) -> Revisio
         stale_evidence=stale_evidence,
         evidence_gaps=tuple(gaps),
         is_valid=is_valid,
+        no_unique_merge_base=merge_base_unique is False,
     )
 
 
@@ -169,7 +173,7 @@ def _resolve_policy(
 def _recompute_disposition(classification: Classification) -> None:
     findings = set(classification.findings)
     blockers = {
-        "STALE_BASE",
+        "NO_UNIQUE_MERGE_BASE",
         "STALE_EVIDENCE",
         "DRAFT",
         "NON_MERGEABLE",
@@ -184,7 +188,7 @@ def _recompute_disposition(classification: Classification) -> None:
         classification.disposition = Disposition.EVIDENCE_ONLY
     elif "DRAFT" in findings or "NON_MERGEABLE" in findings:
         classification.disposition = Disposition.EXCLUDED
-    elif findings & {"STALE_LONG_LIVED", "STALE_BASE", "STALE_EVIDENCE"}:
+    elif findings & {"STALE_LONG_LIVED", "NO_UNIQUE_MERGE_BASE", "STALE_EVIDENCE"}:
         classification.disposition = Disposition.STALE
     else:
         classification.disposition = Disposition.NEEDS_ATTENTION
@@ -200,7 +204,12 @@ def _classify_snapshot(
     sanitized_labels = tuple(
         label for label in pr_snap.labels if label.lower() not in legacy_stale_labels
     )
-    core_snapshot = replace(pr_snap, labels=sanitized_labels)
+    effective_checks, _ignored = partition_effective_checks(
+        pr_snap.checks, getattr(pr_snap, "self_check_suite_ids", ())
+    )
+    core_snapshot = replace(
+        pr_snap, labels=sanitized_labels, checks=tuple(effective_checks)
+    )
     classification = classify(
         core_snapshot,
         authority_patterns=tuple(policy.protected_path_patterns),
@@ -326,6 +335,99 @@ def analyze_cross_pr_overlap(
         overlap_pairs=tuple(overlap_pairs_list),
         claim_ceiling=CLAIM_CEILING,
     )
+
+
+SUPERSEDED_CANCELLED = "SUPERSEDED_CANCELLED"
+SELF_WORKFLOW = "SELF_WORKFLOW"
+
+
+def _check_field(check: Any, key: str) -> Any:
+    if isinstance(check, Mapping):
+        return check.get(key)
+    return getattr(check, key, None)
+
+
+def _strict_int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _is_newer(candidate: Any, reference: Any) -> bool:
+    """True when ``candidate`` is a strictly newer run than ``reference``.
+
+    Check-run ids are monotonic per GitHub installation; ``started_at`` is the
+    fallback when either id is missing. Equal or unknown ordering is not newer.
+    """
+    cand_id = _strict_int(_check_field(candidate, "check_run_id"))
+    ref_id = _strict_int(_check_field(reference, "check_run_id"))
+    if cand_id is not None and ref_id is not None:
+        return cand_id > ref_id
+    cand_started = _check_field(candidate, "started_at")
+    ref_started = _check_field(reference, "started_at")
+    if isinstance(cand_started, str) and isinstance(ref_started, str) and cand_started and ref_started:
+        return cand_started > ref_started
+    return False
+
+
+def _ignored_entry(check: Any, reason: str, superseded_by: Any = None) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "name": _check_field(check, "name"),
+        "status": _check_field(check, "status"),
+        "check_run_id": _strict_int(_check_field(check, "check_run_id")),
+        "check_suite_id": _strict_int(_check_field(check, "check_suite_id")),
+        "reason": reason,
+        "superseded_by_check_run_id": None,
+    }
+    if superseded_by is not None:
+        entry["superseded_by_check_run_id"] = _strict_int(_check_field(superseded_by, "check_run_id"))
+    return entry
+
+
+def partition_effective_checks(
+    checks: Sequence[Any],
+    self_check_suite_ids: Sequence[int] = (),
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    """Split raw checks into effective checks and ignored checks with reasons.
+
+    * ``SELF_WORKFLOW``: the check belongs to a caller-declared check suite of
+      the Repository Intelligence workflow itself, so it is not PR evidence.
+    * ``SUPERSEDED_CANCELLED``: a ``cancelled`` check for which a strictly newer
+      run with the same name exists on the same head (for example a run
+      cancelled by a per-PR concurrency group when a new run started).
+
+    Any other status, including a failure followed by a passing re-run, is kept.
+    """
+    self_suites = {item for item in self_check_suite_ids if _strict_int(item) is not None}
+    effective: list[Any] = []
+    ignored: list[dict[str, Any]] = []
+    checks = list(checks or ())
+    for check in checks:
+        suite = _strict_int(_check_field(check, "check_suite_id"))
+        if suite is not None and suite in self_suites:
+            ignored.append(_ignored_entry(check, SELF_WORKFLOW))
+            continue
+        status = _check_field(check, "status")
+        name = _check_field(check, "name")
+        if isinstance(status, str) and status.strip().lower() == "cancelled" and isinstance(name, str):
+            newer = [
+                other
+                for other in checks
+                if other is not check
+                and _check_field(other, "name") == name
+                and _is_newer(other, check)
+            ]
+            if newer:
+                newest = max(
+                    newer,
+                    key=lambda other: (
+                        _strict_int(_check_field(other, "check_run_id")) or 0,
+                        str(_check_field(other, "started_at") or ""),
+                    ),
+                )
+                ignored.append(_ignored_entry(check, SUPERSEDED_CANCELLED, newest))
+                continue
+        effective.append(check)
+    ignored.sort(key=lambda entry: json.dumps(entry, sort_keys=True, separators=(",", ":")))
+    return effective, ignored
 
 
 def _normalize_check(
@@ -494,6 +596,7 @@ def fingerprint_ci_failures(
 ) -> CIFailureFingerprint:
     """Build deterministic, identity-bound CI failure evidence."""
     gaps: list[str] = list(collection_errors)
+    raw_self_suites: Any = ()
 
     if snapshot is not None:
         if isinstance(snapshot, PRSnapshot):
@@ -502,18 +605,21 @@ def fingerprint_ci_failures(
             collection_complete = snapshot.collection_complete
             gaps.extend(snapshot.collection_errors)
             expected_failure = expected_failure or snapshot.expected_failure
+            raw_self_suites = snapshot.self_check_suite_ids
         elif isinstance(snapshot, Mapping):
             rev_id = revision_identity(snapshot)
             raw_checks = snapshot.get("checks", ())
             collection_complete = snapshot.get("collection_complete", True)
             gaps.extend(snapshot.get("collection_errors", ()))
             expected_failure = expected_failure or snapshot.get("expected_failure", False)
+            raw_self_suites = snapshot.get("self_check_suite_ids") or ()
         else:
             rev_id = revision_identity(snapshot)
             raw_checks = getattr(snapshot, "checks", ())
             collection_complete = getattr(snapshot, "collection_complete", True)
             gaps.extend(getattr(snapshot, "collection_errors", ()))
             expected_failure = expected_failure or getattr(snapshot, "expected_failure", False)
+            raw_self_suites = getattr(snapshot, "self_check_suite_ids", ()) or ()
     else:
         rev_id = revision_identity({
             "repository": repository,
@@ -530,11 +636,17 @@ def fingerprint_ci_failures(
     if not raw_checks:
         gaps.append("no_check_evidence_provided")
 
+    self_check_suite_ids = tuple(sorted({
+        item for item in (raw_self_suites if isinstance(raw_self_suites, (list, tuple)) else ())
+        if _strict_int(item) is not None
+    }))
+    effective_checks, ignored_checks = partition_effective_checks(raw_checks, self_check_suite_ids)
+
     unexpected_failures: list[NormalizedCheckEvidence] = []
     expected_failures: list[NormalizedCheckEvidence] = []
     total_valid_checks = 0
 
-    for chk in raw_checks:
+    for chk in effective_checks:
         norm, chk_gaps = _normalize_check(
             chk,
             expected_failure_override=expected_failure,
@@ -607,9 +719,58 @@ def fingerprint_ci_failures(
         expected_run_id=expected_run_id,
         expected_job_identity=expected_job_identity,
         expected_artifact_identity=expected_artifact_identity,
+        ignored_checks=tuple(ignored_checks),
+        self_check_suite_ids=self_check_suite_ids,
         claim_ceiling=CI_EVIDENCE_CLAIM_CEILING,
     )
     return replace(result, content_sha256=_content_hash(result.to_dict()))
+
+
+def _ignored_checks_are_coherent(payload: Mapping[str, Any]) -> bool:
+    """Every ignored check must carry a reason derivable from its own fields.
+
+    Payloads produced before ignored-check support omit both keys and remain
+    valid; a payload that has one key but not the other is rejected.
+    """
+    has_ignored = "ignored_checks" in payload
+    has_suites = "self_check_suite_ids" in payload
+    if not has_ignored and not has_suites:
+        return True
+    if has_ignored != has_suites:
+        return False
+    ignored = payload.get("ignored_checks")
+    suites = payload.get("self_check_suite_ids")
+    if not isinstance(ignored, list) or not isinstance(suites, list):
+        return False
+    if any(_strict_int(item) is None for item in suites) or suites != sorted(set(suites)):
+        return False
+    failure_run_ids = {
+        check.get("check_run_id")
+        for group in (payload.get("unexpected_failures"), payload.get("expected_failures"))
+        if isinstance(group, list)
+        for check in group
+        if isinstance(check, Mapping) and _strict_int(check.get("check_run_id")) is not None
+    }
+    for entry in ignored:
+        if not isinstance(entry, Mapping) or not isinstance(entry.get("name"), str):
+            return False
+        reason = entry.get("reason")
+        run_id = _strict_int(entry.get("check_run_id"))
+        if run_id is not None and run_id in failure_run_ids:
+            return False
+        if reason == SELF_WORKFLOW:
+            if _strict_int(entry.get("check_suite_id")) not in set(suites):
+                return False
+        elif reason == SUPERSEDED_CANCELLED:
+            status = entry.get("status")
+            if not isinstance(status, str) or status.strip().lower() != "cancelled":
+                return False
+            newer = _strict_int(entry.get("superseded_by_check_run_id"))
+            if run_id is not None and (newer is None or newer <= run_id):
+                return False
+        else:
+            return False
+    return True
 
 
 def verify_ci_failure_evidence(payload: Mapping[str, Any]) -> bool:
@@ -644,6 +805,9 @@ def verify_ci_failure_evidence(payload: Mapping[str, Any]) -> bool:
     if is_complete != (completeness == EvidenceCompleteness.COMPLETE.value):
         return False
     if is_complete and gaps:
+        return False
+
+    if not _ignored_checks_are_coherent(payload):
         return False
 
     failure_groups = (
@@ -725,7 +889,6 @@ def build_repository_intelligence_report(
 
 
 _READINESS_STALE_KEYS = (
-    "stale_base",
     "stale_declared_base",
     "stale_declared_head",
     "stale_declared_main",
@@ -758,6 +921,15 @@ def readiness_item_is_coherent(item: Mapping[str, Any]) -> bool:
     if disposition == Disposition.REVIEW_READY.value:
         if not is_valid or any(identity.get(k) is not False for k in _READINESS_STALE_KEYS):
             return False
+        # A base behind main no longer bars REVIEW_READY; a missing unique
+        # merge-base does. Legacy items without the flag keep the old rule.
+        if "no_unique_merge_base" in identity:
+            if identity.get("no_unique_merge_base") is not False:
+                return False
+        elif identity.get("stale_base") is not False:
+            return False
+    if "no_unique_merge_base" in identity and not isinstance(identity.get("no_unique_merge_base"), bool):
+        return False
     return True
 
 

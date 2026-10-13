@@ -14,9 +14,13 @@ from test_github_action import FakeGitHubAPI
 
 
 class StaleBaseAPI(FakeGitHubAPI):
+    # Issue #98: a base merely behind main is informational; readiness is STALE
+    # only when the head has no unique merge-base with current main.
     def get_json(self, path, params=None):
         if path == "/repos/owner/repo/git/ref/heads/main":
             return {"object": {"sha": "c" * 40}}
+        if path.startswith("/repos/owner/repo/compare/"):
+            raise RuntimeError("GitHub HTTP 404: No common ancestor between main and head")
         return super().get_json(path, params)
 
 
@@ -63,6 +67,7 @@ def _report_payload():
         repository="owner/repo", pr_number=1, title="t", state="open", draft=True, mergeable=True,
         base_branch="main", base_sha="base1", head_branch="f", head_sha="head1",
         current_main_sha="main2", changed_files=("a.py",), checks=(CheckObservation(name="ci", status="success"),),
+        merge_base_unique=False,
     )
     return ri.build_repository_intelligence_report([pr]).to_dict()
 

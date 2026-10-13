@@ -249,7 +249,76 @@ def _status_url_matches_subject(
     )
 
 
-def collect_pr_snapshot(api: GitHubReadAPI, repository: str, pr_number: int) -> dict[str, Any]:
+def _resolve_merge_base_unique(
+    api: GitHubReadAPI, prefix: str, base_sha: str, head_sha: str, current_main_sha: str
+) -> bool | None:
+    """Best-effort merge-base acquisition; the engine decides what it means.
+
+    GitHub resolves at most one merge-base and answers 404 "No common ancestor"
+    when there is none. Any other failure is unknown (None), never a finding.
+    """
+    if base_sha == current_main_sha:
+        return True
+    quote = urllib.parse.quote
+    path = f"{prefix}/compare/{quote(current_main_sha, safe='')}...{quote(head_sha, safe='')}"
+    try:
+        value = api.get_json(path)
+    except RuntimeError as exc:
+        message = str(exc)
+        if message.startswith("GitHub HTTP 404") and "no common ancestor" in message.lower():
+            return False
+        return None
+    merge_base = value.get("merge_base_commit") if isinstance(value, Mapping) else None
+    sha = merge_base.get("sha") if isinstance(merge_base, Mapping) else None
+    return True if isinstance(sha, str) and sha else None
+
+
+def _resolve_self_check_suite_ids(
+    api: GitHubReadAPI, prefix: str, head_sha: str, self_run_id: int | None
+) -> list[int]:
+    """Best-effort check-suite ids of this workflow's runs for the PR head.
+
+    These identify the Repository Intelligence workflow's own jobs so the
+    engine can exclude them from PR failure evidence. Failure is non-fatal.
+    """
+    if not isinstance(self_run_id, int) or isinstance(self_run_id, bool) or self_run_id <= 0:
+        return []
+    suites: set[int] = set()
+    try:
+        run = api.get_json(f"{prefix}/actions/runs/{self_run_id}")
+    except RuntimeError:
+        return []
+    if not isinstance(run, Mapping):
+        return []
+    if isinstance(run.get("check_suite_id"), int):
+        suites.add(int(run["check_suite_id"]))
+    workflow_id = run.get("workflow_id")
+    if isinstance(workflow_id, int) and not isinstance(workflow_id, bool):
+        try:
+            listing = api.get_json(
+                f"{prefix}/actions/workflows/{workflow_id}/runs",
+                {"head_sha": head_sha, "per_page": 100},
+            )
+        except RuntimeError:
+            listing = None
+        rows = listing.get("workflow_runs") if isinstance(listing, Mapping) else None
+        for row in rows if isinstance(rows, list) else ():
+            if (
+                isinstance(row, Mapping)
+                and row.get("head_sha") == head_sha
+                and isinstance(row.get("check_suite_id"), int)
+            ):
+                suites.add(int(row["check_suite_id"]))
+    return sorted(suites)
+
+
+def collect_pr_snapshot(
+    api: GitHubReadAPI,
+    repository: str,
+    pr_number: int,
+    *,
+    self_run_id: int | None = None,
+) -> dict[str, Any]:
     """Collect one normalized PR snapshot without reading or executing PR file content."""
     repository = _validate_repo(repository)
     if not isinstance(pr_number, int) or pr_number <= 0:
@@ -447,6 +516,10 @@ def collect_pr_snapshot(api: GitHubReadAPI, repository: str, pr_number: int) -> 
         "collection_errors": collection_errors,
         "created_at": str(pr.get("created_at") or ""),
         "updated_at": str(pr.get("updated_at") or ""),
+        "merge_base_unique": _resolve_merge_base_unique(
+            api, prefix, base_sha, head_sha, current_main_sha
+        ),
+        "self_check_suite_ids": _resolve_self_check_suite_ids(api, prefix, head_sha, self_run_id),
     }
     return snapshot
 
@@ -715,7 +788,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         output = Path(args.output)
         try:
             api = GitHubReadClient(token, api_url=os.environ.get("GITHUB_API_URL", DEFAULT_API_URL))
-            snapshot = collect_pr_snapshot(api, repository, pr_number)
+            run_id_raw = os.environ.get("GITHUB_RUN_ID", "")
+            snapshot = collect_pr_snapshot(
+                api,
+                repository,
+                pr_number,
+                self_run_id=int(run_id_raw) if run_id_raw.isdigit() else None,
+            )
             bundle = run_cloud_bundle(snapshot)
             if not verify_cloud_bundle(bundle):
                 raise RuntimeError("cloud bundle failed self-verification")

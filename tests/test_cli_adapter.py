@@ -242,7 +242,7 @@ def sample_query_data() -> dict:
 
 
 def test_supported_operations_set() -> None:
-    assert OPERATIONS == frozenset({"revision", "readiness", "overlap", "ci", "impact", "cfi", "eia", "facts", "query", "knowledge", "guard-delta"})
+    assert OPERATIONS == frozenset({"revision", "readiness", "overlap", "ci", "impact", "cfi", "eia", "facts", "query", "knowledge", "guard-delta", "systemic"})
 
 
 def test_execute_operation_revision(sample_revision_snapshot: dict) -> None:

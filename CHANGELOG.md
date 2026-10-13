@@ -4,6 +4,25 @@ All notable changes to Repository Intelligence Engine are documented here.
 
 The project follows semantic versioning while it remains in the `0.x` series. Immutable release tags are never moved after publication.
 
+## [0.1.5] - Unreleased (tag after merge)
+
+Signal-quality release for consumers that surface Repository Intelligence to humans (Issue #98).
+
+### Changed
+
+- CFI no longer counts a `cancelled` check as a failure when a strictly newer run with the same name exists on the same PR head (`SUPERSEDED_CANCELLED`), and ignores checks whose check suite is a caller-declared run of the Repository Intelligence workflow itself (`SELF_WORKFLOW`, snapshot key `self_check_suite_ids`). Ignored checks are recorded in `reviewer.ci_failure_evidence.v1` as `ignored_checks` with a derivable reason; the verifier rejects ignored entries whose reason does not follow from their own fields. A failure followed by a passing re-run is still counted. Readiness `UNEXPECTED_FAILURE` uses the same effective check set.
+- `STALE_BASE` (base behind current main) is now informational: it no longer makes readiness `STALE` and no longer bars `REVIEW_READY`. Freshness belongs to the consumer's merge gate. A new blocker `NO_UNIQUE_MERGE_BASE` (snapshot `merge_base_unique: false`) keeps readiness `STALE`. Revision identity gains `no_unique_merge_base`; readiness coherence verification rejects re-hashed `REVIEW_READY` when it is true, and items without the field keep the previous fresh-base rule.
+- The GitHub Action adapter acquires `merge_base_unique` (compare API; `false` only on GitHub's "No common ancestor" 404, `null` on any other failure) and `self_check_suite_ids` (current workflow run plus its runs for the same head SHA via the actions API, best-effort). Neither lookup can make collection incomplete.
+- `pyproject.toml` version is `0.1.5`. README pins stay on `v0.1.4` until the `v0.1.5` tag is published.
+
+### Added
+
+- New `systemic` operation (`reviewer.systemic_ci_failures.v1`, `CI_EVIDENCE_ONLY`): given per-PR check summaries, reports each check name whose latest run is a terminal failure other than `cancelled`/`action_required` on at least `min_pull_requests` (default 3) open PRs with `completed_at` within `window_hours` (default 24) of `observed_at`. `verify_systemic_failure_report` re-derives the result from the embedded per-PR failing names.
+
+### Safety boundary
+
+- All outputs remain advisory under unchanged claim ceilings. No approval, merge, release, or dispatch authority is added.
+
 ## [0.1.4] - 2026-10-11
 
 `v0.1.3` was never published as a release tag (the tag name was consumed by an immutable release that was created and deleted by mistake), so this is the first immutable tag that includes the `0.1.3` content below.

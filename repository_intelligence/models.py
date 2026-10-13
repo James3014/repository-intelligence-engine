@@ -69,6 +69,10 @@ class PRSnapshot:
     collection_errors: tuple[str, ...] = ()
     created_at: str = ""
     updated_at: str = ""
+    # None = unknown, True = a merge-base with current main was resolved,
+    # False = acquisition proved there is no unique merge-base.
+    merge_base_unique: bool | None = None
+    self_check_suite_ids: tuple[int, ...] = ()
 
     @classmethod
     def from_dict(cls, d: dict[str, Any], main: str):
@@ -112,6 +116,16 @@ class PRSnapshot:
             tuple(d.get("collection_errors", [])),
             d.get("created_at", ""),
             d.get("updated_at", ""),
+            merge_base_unique=(
+                d.get("merge_base_unique")
+                if isinstance(d.get("merge_base_unique"), bool)
+                else None
+            ),
+            self_check_suite_ids=tuple(
+                item
+                for item in (d.get("self_check_suite_ids") or ())
+                if isinstance(item, int) and not isinstance(item, bool)
+            ),
         )
 
 

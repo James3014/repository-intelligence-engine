@@ -71,8 +71,16 @@ from .guard_delta import (
     analyze_guard_semantic_delta,
     verify_guard_semantic_delta_report,
 )
+from .systemic import (
+    SYSTEMIC_SCHEMA,
+    SystemicFailure,
+    SystemicFailureReportV1,
+    analyze_systemic_failures,
+    verify_systemic_failure_report,
+)
 from .core import (
     analyze_cross_pr_overlap,
+    partition_effective_checks,
     build_repository_intelligence_report,
     classify_readiness,
     fingerprint_ci_failures,
@@ -143,6 +151,9 @@ __all__ = [
     "verify_knowledge_applicability_report",
     "analyze_guard_semantic_delta",
     "verify_guard_semantic_delta_report",
+    "analyze_systemic_failures",
+    "verify_systemic_failure_report",
+    "partition_effective_checks",
     "build_repository_intelligence_report",
     "verify_repository_intelligence_report",
     "CHECK_ROLE_SCHEMA",
