@@ -4,6 +4,18 @@ All notable changes to Repository Intelligence Engine are documented here.
 
 The project follows semantic versioning while it remains in the `0.x` series. Immutable release tags are never moved after publication.
 
+## [0.1.6] - Unreleased (tag after merge)
+
+Systemic-signal hardening (follow-up to #98).
+
+### Changed
+
+- `systemic`: an open-PR success only sets a check's cutoff when at least two distinct open PRs succeeded (the cutoff is the time the second PR passed). A success on `main` or a main change to the workflow file still sets it alone. Previously one passing PR could suppress a real systemic failure.
+- `systemic`: the report gains `suppressed_by_cutoff` and a `notes` entry "N failures suppressed by cutoff" so a cutoff-suppressed result is visible; the verifier rejects a malformed count or note.
+- `systemic`: checks without a workflow path are keyed `("app:<app_slug>", name)`, or `("status", name)` when there is no app, instead of collapsing into `("", name)`; commit statuses no longer merge across apps or clear unrelated checks.
+- `verify_ci_failure_evidence` cross-checks `unexpected_count` / `expected_count` against the listed failures, rejecting re-hashed payloads with inconsistent counts.
+- `pyproject.toml` version is `0.1.6`.
+
 ## [0.1.5] - Unreleased (tag after merge)
 
 Signal-quality release for consumers that surface Repository Intelligence to humans (Issue #98).

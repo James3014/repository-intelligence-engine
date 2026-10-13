@@ -7,11 +7,17 @@ and reports such checks. It is deterministic, reads no network state, and makes
 no root-cause, merge, or repair claim.
 
 A check is identified by ``(workflow_path, name)`` so equally named jobs in
-different workflows are never merged. A failure only counts when it completed
-after the check's cutoff: the newest success of the same check on any open PR
-or on main, or the newest main change to the workflow file, whichever is later.
-That keeps an already-fixed failure (e.g. fixed by a workflow change on main
-that the failing PRs have not re-run against) from being reported.
+different workflows are never merged. Checks without a workflow path (commit
+statuses, non-Actions apps) are keyed ``("app:<app_slug>", name)`` or, with no
+app, ``("status", name)``, so they never merge across apps or into a workflow.
+
+A failure only counts when it completed after the check's cutoff, the latest of:
+a success of the same check on main, a main change to the workflow file, or the
+time at which at least two distinct open PRs had succeeded (one passing PR is
+not enough: it may be the one PR unaffected by the breakage). That keeps an
+already-fixed failure from being reported. Failures dropped by a cutoff are
+counted in ``suppressed_by_cutoff`` and a "N failures suppressed by cutoff"
+note, so a silent result is visible.
 """
 from __future__ import annotations
 
@@ -29,7 +35,8 @@ DEFAULT_WINDOW_HOURS = 24
 NON_SYSTEMIC_TERMINAL_STATUSES = frozenset({"cancelled", "action_required"})
 
 
-CheckKey = tuple[str, str]  # (workflow_path or "", check name)
+CheckKey = tuple[str, str]  # (workflow_path | "app:<slug>" | "status", check name)
+MIN_OPEN_PR_SUCCESSES_FOR_CUTOFF = 2
 
 
 @dataclass(frozen=True)
@@ -57,6 +64,8 @@ class SystemicFailureReportV1:
     failing_checks_by_pr: dict[int, tuple[CheckKey, ...]]
     cutoffs: dict[CheckKey, str]
     systemic_failures: tuple[SystemicFailure, ...]
+    suppressed_by_cutoff: int
+    notes: tuple[str, ...]
     evidence_gaps: tuple[str, ...]
     evidence_completeness: EvidenceCompleteness
     content_sha256: str
@@ -80,6 +89,8 @@ class SystemicFailureReportV1:
                 for key, value in sorted(self.cutoffs.items())
             ],
             "systemic_failures": [item.to_dict() for item in self.systemic_failures],
+            "suppressed_by_cutoff": self.suppressed_by_cutoff,
+            "notes": list(self.notes),
             "evidence_gaps": list(self.evidence_gaps),
             "evidence_completeness": self.evidence_completeness.value,
             "claim_ceiling": self.claim_ceiling,
@@ -119,7 +130,13 @@ def _run_order(check: Mapping[str, Any]) -> tuple[int, str, str]:
 
 def _key(check: Mapping[str, Any]) -> CheckKey:
     path = check.get("workflow_path")
-    return (path if isinstance(path, str) else "", str(check.get("name")))
+    name = str(check.get("name"))
+    if isinstance(path, str) and path:
+        return (path, name)
+    app = check.get("app_slug")
+    if isinstance(app, str) and app:
+        return (f"app:{app}", name)
+    return ("status", name)
 
 
 def _valid_checks(checks: Any, *, label: str, gaps: list[str]) -> list[Mapping[str, Any]]:
@@ -236,23 +253,30 @@ def analyze_systemic_failures(data: Mapping[str, Any]) -> SystemicFailureReportV
             continue
         workflow_changed[path] = parsed
 
-    # Cutoff per check: newest success anywhere (open PRs or main) or newest
-    # main change to the workflow file, whichever is later.
+    # Cutoff per check: newest success on main, newest main change to the
+    # workflow file, or the time the second distinct open PR succeeded.
     cutoff_times: dict[CheckKey, datetime] = {}
 
     def _raise_cutoff(key: CheckKey, when: datetime | None) -> None:
         if when is not None and (key not in cutoff_times or when > cutoff_times[key]):
             cutoff_times[key] = when
 
+    pr_successes: dict[CheckKey, list[datetime]] = {}
     for latest in per_pr.values():
         for key, check in latest.items():
-            if _is_success(check):
-                _raise_cutoff(key, _parse_time(check.get("completed_at")))
+            done = _parse_time(check.get("completed_at")) if _is_success(check) else None
+            if done is not None:
+                pr_successes.setdefault(key, []).append(done)  # one latest run per PR
+    for key, times in pr_successes.items():
+        if len(times) >= MIN_OPEN_PR_SUCCESSES_FOR_CUTOFF:
+            times.sort(reverse=True)
+            _raise_cutoff(key, times[MIN_OPEN_PR_SUCCESSES_FOR_CUTOFF - 1])
     for check in main_checks:
         if _is_success(check):
             _raise_cutoff(_key(check), _parse_time(check.get("completed_at")))
 
     failing_by_pr: dict[int, tuple[CheckKey, ...]] = {}
+    suppressed = 0
     if observed is not None:
         window_start = observed - timedelta(hours=window_hours)
         window_end = observed + timedelta(minutes=5)
@@ -270,6 +294,7 @@ def analyze_systemic_failures(data: Mapping[str, Any]) -> SystemicFailureReportV
                     continue
                 cutoff = cutoff_times.get(key)
                 if cutoff is not None and completed <= cutoff:
+                    suppressed += 1
                     continue
                 keys.append(key)
             if keys:
@@ -283,6 +308,7 @@ def analyze_systemic_failures(data: Mapping[str, Any]) -> SystemicFailureReportV
         completeness = EvidenceCompleteness.PARTIAL if deduped_gaps else EvidenceCompleteness.COMPLETE
         systemic = _systemic_from(failing_by_pr, min_prs)
 
+    notes = (f"{suppressed} failures suppressed by cutoff",) if suppressed else ()
     report = SystemicFailureReportV1(
         repository=repository,
         observed_at=observed_raw if isinstance(observed_raw, str) else "",
@@ -295,6 +321,8 @@ def analyze_systemic_failures(data: Mapping[str, Any]) -> SystemicFailureReportV
             for key, value in cutoff_times.items()
         },
         systemic_failures=systemic,
+        suppressed_by_cutoff=suppressed,
+        notes=notes,
         evidence_gaps=deduped_gaps,
         evidence_completeness=completeness,
         content_sha256="",
@@ -313,6 +341,12 @@ def verify_systemic_failure_report(payload: Mapping[str, Any]) -> bool:
         return False
     min_prs = payload.get("min_pull_requests")
     if isinstance(min_prs, bool) or not isinstance(min_prs, int) or min_prs <= 0:
+        return False
+    suppressed = payload.get("suppressed_by_cutoff")
+    notes = payload.get("notes")
+    if isinstance(suppressed, bool) or not isinstance(suppressed, int) or suppressed < 0:
+        return False
+    if notes != ([f"{suppressed} failures suppressed by cutoff"] if suppressed else []):
         return False
     raw = payload.get("failing_checks_by_pr")
     if not isinstance(raw, Mapping):
