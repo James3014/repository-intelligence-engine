@@ -19,8 +19,11 @@ def classify(pr, authority_patterns=DEFAULT_AUTHORITY_PATTERNS):
     # consumer's merge gate. Only a proven missing unique merge-base blocks.
     if pr.base_sha != pr.current_main_sha:
         add("STALE_BASE")
-    if getattr(pr, "merge_base_unique", None) is False:
+    merge_base_status = getattr(pr, "merge_base_status", None)
+    if merge_base_status == "NONE":
         add("NO_UNIQUE_MERGE_BASE", "no unique merge-base with current main")
+    elif pr.base_sha != pr.current_main_sha and merge_base_status != "RESOLVED":
+        add("MERGE_BASE_UNKNOWN", "merge-base with current main unknown (informational)")
     if (
         (pr.declared_base_sha and pr.declared_base_sha != pr.base_sha)
         or (pr.declared_head_sha and pr.declared_head_sha != pr.head_sha)

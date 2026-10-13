@@ -5,12 +5,19 @@ shared dependency (workflow, runner, main-branch regression) than a defect in
 any single PR. This module aggregates already-acquired per-PR check summaries
 and reports such checks. It is deterministic, reads no network state, and makes
 no root-cause, merge, or repair claim.
+
+A check is identified by ``(workflow_path, name)`` so equally named jobs in
+different workflows are never merged. A failure only counts when it completed
+after the check's cutoff: the newest success of the same check on any open PR
+or on main, or the newest main change to the workflow file, whichever is later.
+That keeps an already-fixed failure (e.g. fixed by a workflow change on main
+that the failing PRs have not re-run against) from being reported.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from ._hashing import content_hash as _content_hash
 from .contracts import CI_EVIDENCE_CLAIM_CEILING, EvidenceCompleteness, is_terminal_failure_status
@@ -22,14 +29,19 @@ DEFAULT_WINDOW_HOURS = 24
 NON_SYSTEMIC_TERMINAL_STATUSES = frozenset({"cancelled", "action_required"})
 
 
+CheckKey = tuple[str, str]  # (workflow_path or "", check name)
+
+
 @dataclass(frozen=True)
 class SystemicFailure:
     check_name: str
     pr_numbers: tuple[int, ...]
+    workflow_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "check_name": self.check_name,
+            "workflow_path": self.workflow_path,
             "pr_numbers": list(self.pr_numbers),
             "failing_pr_count": len(self.pr_numbers),
         }
@@ -42,7 +54,8 @@ class SystemicFailureReportV1:
     window_hours: int
     min_pull_requests: int
     pull_request_count: int
-    failing_checks_by_pr: dict[int, tuple[str, ...]]
+    failing_checks_by_pr: dict[int, tuple[CheckKey, ...]]
+    cutoffs: dict[CheckKey, str]
     systemic_failures: tuple[SystemicFailure, ...]
     evidence_gaps: tuple[str, ...]
     evidence_completeness: EvidenceCompleteness
@@ -59,8 +72,13 @@ class SystemicFailureReportV1:
             "min_pull_requests": self.min_pull_requests,
             "pull_request_count": self.pull_request_count,
             "failing_checks_by_pr": {
-                str(number): list(names) for number, names in sorted(self.failing_checks_by_pr.items())
+                str(number): [list(key) for key in keys]
+                for number, keys in sorted(self.failing_checks_by_pr.items())
             },
+            "cutoffs": [
+                {"workflow_path": key[0], "check_name": key[1], "cutoff": value}
+                for key, value in sorted(self.cutoffs.items())
+            ],
             "systemic_failures": [item.to_dict() for item in self.systemic_failures],
             "evidence_gaps": list(self.evidence_gaps),
             "evidence_completeness": self.evidence_completeness.value,
@@ -99,56 +117,60 @@ def _run_order(check: Mapping[str, Any]) -> tuple[int, str, str]:
     )
 
 
-def _failing_names(
-    checks: Any,
-    *,
-    window_start: datetime,
-    window_end: datetime,
-    label: str,
-    gaps: list[str],
-) -> tuple[str, ...]:
-    """Names whose latest run on this PR is a systemic-eligible failure in window."""
+def _key(check: Mapping[str, Any]) -> CheckKey:
+    path = check.get("workflow_path")
+    return (path if isinstance(path, str) else "", str(check.get("name")))
+
+
+def _valid_checks(checks: Any, *, label: str, gaps: list[str]) -> list[Mapping[str, Any]]:
     if not isinstance(checks, list):
         gaps.append(f"{label}: checks must be a list")
-        return ()
-    latest: dict[str, Mapping[str, Any]] = {}
+        return []
+    valid: list[Mapping[str, Any]] = []
     for check in checks:
         if not isinstance(check, Mapping):
             gaps.append(f"{label}: check entry must be a mapping")
             continue
-        name = check.get("name")
-        status = check.get("status")
+        name, status = check.get("name"), check.get("status")
         if not isinstance(name, str) or not name or not isinstance(status, str) or not status:
             gaps.append(f"{label}: check name/status missing")
             continue
-        current = latest.get(name)
+        valid.append(check)
+    return valid
+
+
+def _latest_by_key(checks: list[Mapping[str, Any]]) -> dict[CheckKey, Mapping[str, Any]]:
+    latest: dict[CheckKey, Mapping[str, Any]] = {}
+    for check in checks:
+        key = _key(check)
+        current = latest.get(key)
         if current is None or _run_order(check) > _run_order(current):
-            latest[name] = check
-    failing: list[str] = []
-    for name, check in latest.items():
-        status = str(check.get("status")).strip().lower()
-        if not is_terminal_failure_status(status) or status in NON_SYSTEMIC_TERMINAL_STATUSES:
-            continue
-        completed = _parse_time(check.get("completed_at"))
-        if completed is None or not (window_start <= completed <= window_end):
-            continue
-        failing.append(name)
-    return tuple(sorted(failing))
+            latest[key] = check
+    return latest
+
+
+def _is_success(check: Mapping[str, Any]) -> bool:
+    return str(check.get("status")).strip().lower() == "success"
+
+
+def _is_systemic_failure(check: Mapping[str, Any]) -> bool:
+    status = str(check.get("status")).strip().lower()
+    return is_terminal_failure_status(status) and status not in NON_SYSTEMIC_TERMINAL_STATUSES
 
 
 def _systemic_from(
-    failing_by_pr: Mapping[int, tuple[str, ...]], min_pull_requests: int
+    failing_by_pr: Mapping[int, Sequence[CheckKey]], min_pull_requests: int
 ) -> tuple[SystemicFailure, ...]:
-    by_name: dict[str, set[int]] = {}
-    for number, names in failing_by_pr.items():
-        for name in names:
-            by_name.setdefault(name, set()).add(number)
+    by_key: dict[CheckKey, set[int]] = {}
+    for number, keys in failing_by_pr.items():
+        for key in keys:
+            by_key.setdefault(tuple(key), set()).add(number)  # type: ignore[arg-type]
     failures = [
-        SystemicFailure(check_name=name, pr_numbers=tuple(sorted(numbers)))
-        for name, numbers in by_name.items()
+        SystemicFailure(check_name=key[1], workflow_path=key[0], pr_numbers=tuple(sorted(numbers)))
+        for key, numbers in by_key.items()
         if len(numbers) >= min_pull_requests
     ]
-    failures.sort(key=lambda item: (-len(item.pr_numbers), item.check_name))
+    failures.sort(key=lambda item: (-len(item.pr_numbers), item.workflow_path, item.check_name))
     return tuple(failures)
 
 
@@ -189,27 +211,69 @@ def analyze_systemic_failures(data: Mapping[str, Any]) -> SystemicFailureReportV
         gaps.append("pull_requests must be a list")
         raw_prs = []
 
-    failing_by_pr: dict[int, tuple[str, ...]] = {}
-    valid_prs = 0
+    per_pr: dict[int, dict[CheckKey, Mapping[str, Any]]] = {}
     for index, pr in enumerate(raw_prs):
         number = pr.get("pr_number") if isinstance(pr, Mapping) else None
         if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
             gaps.append(f"pull_requests[{index}]: pr_number must be a positive integer")
             continue
-        if number in failing_by_pr:
+        if number in per_pr:
             gaps.append(f"pull_requests[{index}]: duplicate pr_number {number}")
             continue
-        valid_prs += 1
-        if observed is None:
-            failing_by_pr[number] = ()
+        per_pr[number] = _latest_by_key(_valid_checks(pr.get("checks"), label=f"pr:{number}", gaps=gaps))
+    valid_prs = len(per_pr)
+    main_checks = _valid_checks(data.get("main_checks", []), label="main_checks", gaps=gaps)
+
+    raw_changed = data.get("workflow_changed_at", {})
+    if not isinstance(raw_changed, Mapping):
+        gaps.append("workflow_changed_at must be a mapping of workflow path to timestamp")
+        raw_changed = {}
+    workflow_changed: dict[str, datetime] = {}
+    for path, value in raw_changed.items():
+        parsed = _parse_time(value)
+        if not isinstance(path, str) or parsed is None:
+            gaps.append("workflow_changed_at entries must map a path to an ISO-8601 timestamp")
             continue
-        failing_by_pr[number] = _failing_names(
-            pr.get("checks"),
-            window_start=observed - timedelta(hours=window_hours),
-            window_end=observed + timedelta(minutes=5),
-            label=f"pr:{number}",
-            gaps=gaps,
-        )
+        workflow_changed[path] = parsed
+
+    # Cutoff per check: newest success anywhere (open PRs or main) or newest
+    # main change to the workflow file, whichever is later.
+    cutoff_times: dict[CheckKey, datetime] = {}
+
+    def _raise_cutoff(key: CheckKey, when: datetime | None) -> None:
+        if when is not None and (key not in cutoff_times or when > cutoff_times[key]):
+            cutoff_times[key] = when
+
+    for latest in per_pr.values():
+        for key, check in latest.items():
+            if _is_success(check):
+                _raise_cutoff(key, _parse_time(check.get("completed_at")))
+    for check in main_checks:
+        if _is_success(check):
+            _raise_cutoff(_key(check), _parse_time(check.get("completed_at")))
+
+    failing_by_pr: dict[int, tuple[CheckKey, ...]] = {}
+    if observed is not None:
+        window_start = observed - timedelta(hours=window_hours)
+        window_end = observed + timedelta(minutes=5)
+        for latest in per_pr.values():
+            for key in latest:
+                if key[0] in workflow_changed:
+                    _raise_cutoff(key, workflow_changed[key[0]])
+        for number, latest in per_pr.items():
+            keys: list[CheckKey] = []
+            for key, check in latest.items():
+                completed = _parse_time(check.get("completed_at"))
+                if not _is_systemic_failure(check) or completed is None:
+                    continue
+                if not (window_start <= completed <= window_end):
+                    continue
+                cutoff = cutoff_times.get(key)
+                if cutoff is not None and completed <= cutoff:
+                    continue
+                keys.append(key)
+            if keys:
+                failing_by_pr[number] = tuple(sorted(keys))
 
     deduped_gaps = tuple(dict.fromkeys(gaps))
     if observed is None or valid_prs == 0:
@@ -225,7 +289,11 @@ def analyze_systemic_failures(data: Mapping[str, Any]) -> SystemicFailureReportV
         window_hours=window_hours,
         min_pull_requests=min_prs,
         pull_request_count=valid_prs,
-        failing_checks_by_pr={number: names for number, names in failing_by_pr.items() if names},
+        failing_checks_by_pr=failing_by_pr,
+        cutoffs={
+            key: value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            for key, value in cutoff_times.items()
+        },
         systemic_failures=systemic,
         evidence_gaps=deduped_gaps,
         evidence_completeness=completeness,
@@ -249,15 +317,20 @@ def verify_systemic_failure_report(payload: Mapping[str, Any]) -> bool:
     raw = payload.get("failing_checks_by_pr")
     if not isinstance(raw, Mapping):
         return False
-    failing: dict[int, tuple[str, ...]] = {}
-    for key, names in raw.items():
+    failing: dict[int, tuple[CheckKey, ...]] = {}
+    for raw_number, keys in raw.items():
         try:
-            number = int(key)
+            number = int(raw_number)
         except (TypeError, ValueError):
             return False
-        if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        if not isinstance(keys, list):
             return False
-        failing[number] = tuple(names)
+        parsed: list[CheckKey] = []
+        for key in keys:
+            if not isinstance(key, list) or len(key) != 2 or not all(isinstance(part, str) for part in key):
+                return False
+            parsed.append((key[0], key[1]))
+        failing[number] = tuple(parsed)
     completeness = payload.get("evidence_completeness")
     expected = (
         []

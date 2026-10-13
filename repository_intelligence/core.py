@@ -71,7 +71,7 @@ def revision_identity(snapshot: PRSnapshot | Mapping[str, Any] | Any) -> Revisio
         declared_base = snapshot.declared_base_sha
         declared_head = snapshot.declared_head_sha
         declared_main = snapshot.declared_main_sha
-        merge_base_unique = snapshot.merge_base_unique
+        merge_base_status = snapshot.merge_base_status
     elif isinstance(snapshot, Mapping):
         repository = snapshot.get("repository", "")
         pr_number = snapshot.get("pr_number", 0)
@@ -81,7 +81,7 @@ def revision_identity(snapshot: PRSnapshot | Mapping[str, Any] | Any) -> Revisio
         declared_base = snapshot.get("declared_base_sha") or snapshot.get("declared_base")
         declared_head = snapshot.get("declared_head_sha") or snapshot.get("declared_head")
         declared_main = snapshot.get("declared_main_sha") or snapshot.get("declared_main")
-        merge_base_unique = snapshot.get("merge_base_unique")
+        merge_base_status = snapshot.get("merge_base_status")
     else:
         repository = getattr(snapshot, "repository", "")
         pr_number = getattr(snapshot, "pr_number", 0)
@@ -91,7 +91,7 @@ def revision_identity(snapshot: PRSnapshot | Mapping[str, Any] | Any) -> Revisio
         declared_base = getattr(snapshot, "declared_base_sha", None) or getattr(snapshot, "declared_base", None)
         declared_head = getattr(snapshot, "declared_head_sha", None) or getattr(snapshot, "declared_head", None)
         declared_main = getattr(snapshot, "declared_main_sha", None) or getattr(snapshot, "declared_main", None)
-        merge_base_unique = getattr(snapshot, "merge_base_unique", None)
+        merge_base_status = getattr(snapshot, "merge_base_status", None)
 
     if not _validate_repo_format(repository):
         gaps.append("repository domain or format invalid")
@@ -128,7 +128,7 @@ def revision_identity(snapshot: PRSnapshot | Mapping[str, Any] | Any) -> Revisio
         stale_evidence=stale_evidence,
         evidence_gaps=tuple(gaps),
         is_valid=is_valid,
-        no_unique_merge_base=merge_base_unique is False,
+        no_unique_merge_base=merge_base_status == "NONE",
     )
 
 
@@ -228,6 +228,8 @@ def _classify_snapshot(
     mergeable_unknown = pr_snap.mergeable is None
     if mergeable_unknown:
         gaps.append("mergeable state unknown")
+    if "MERGE_BASE_UNKNOWN" in classification.findings:
+        gaps.append("merge-base with current main unknown")
     if not rev_id.is_valid:
         if "INVALID_IDENTITY" not in classification.findings:
             classification.findings.append("INVALID_IDENTITY")
@@ -351,21 +353,33 @@ def _strict_int(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def _is_newer(candidate: Any, reference: Any) -> bool:
-    """True when ``candidate`` is a strictly newer run than ``reference``.
+def _run_identity(check: Any) -> tuple[str, str, int, int] | None:
+    """(name, app, workflow id, check-run id) or None when any part is missing.
 
-    Check-run ids are monotonic per GitHub installation; ``started_at`` is the
-    fallback when either id is missing. Equal or unknown ordering is not newer.
+    Only check runs carry this identity; commit statuses never supersede or
+    get superseded, and there is no timestamp fallback.
     """
-    cand_id = _strict_int(_check_field(candidate, "check_run_id"))
-    ref_id = _strict_int(_check_field(reference, "check_run_id"))
-    if cand_id is not None and ref_id is not None:
-        return cand_id > ref_id
-    cand_started = _check_field(candidate, "started_at")
-    ref_started = _check_field(reference, "started_at")
-    if isinstance(cand_started, str) and isinstance(ref_started, str) and cand_started and ref_started:
-        return cand_started > ref_started
-    return False
+    name = _check_field(check, "name")
+    app = _check_field(check, "app_slug")
+    workflow_id = _strict_int(_check_field(check, "workflow_id"))
+    run_id = _strict_int(_check_field(check, "check_run_id"))
+    if not isinstance(name, str) or not name or not isinstance(app, str) or not app:
+        return None
+    if workflow_id is None or run_id is None:
+        return None
+    return name, app, workflow_id, run_id
+
+
+def _supersedes(candidate: Any, reference: Any) -> bool:
+    """True when ``candidate`` is a strictly newer run of the same check.
+
+    Same check name, same app, same workflow, and a strictly greater
+    check-run id (monotonic per GitHub installation).
+    """
+    cand, ref = _run_identity(candidate), _run_identity(reference)
+    if cand is None or ref is None:
+        return False
+    return cand[:3] == ref[:3] and cand[3] > ref[3]
 
 
 def _ignored_entry(check: Any, reason: str, superseded_by: Any = None) -> dict[str, Any]:
@@ -374,6 +388,8 @@ def _ignored_entry(check: Any, reason: str, superseded_by: Any = None) -> dict[s
         "status": _check_field(check, "status"),
         "check_run_id": _strict_int(_check_field(check, "check_run_id")),
         "check_suite_id": _strict_int(_check_field(check, "check_suite_id")),
+        "app_slug": _check_field(check, "app_slug") if isinstance(_check_field(check, "app_slug"), str) else None,
+        "workflow_id": _strict_int(_check_field(check, "workflow_id")),
         "reason": reason,
         "superseded_by_check_run_id": None,
     }
@@ -390,9 +406,10 @@ def partition_effective_checks(
 
     * ``SELF_WORKFLOW``: the check belongs to a caller-declared check suite of
       the Repository Intelligence workflow itself, so it is not PR evidence.
-    * ``SUPERSEDED_CANCELLED``: a ``cancelled`` check for which a strictly newer
-      run with the same name exists on the same head (for example a run
-      cancelled by a per-PR concurrency group when a new run started).
+    * ``SUPERSEDED_CANCELLED``: a ``cancelled`` check run for which a strictly
+      newer run of the same check (same name, app, and workflow; greater
+      check-run id) exists on the same head, for example a run cancelled by a
+      per-PR concurrency group when a new run started.
 
     Any other status, including a failure followed by a passing re-run, is kept.
     """
@@ -406,23 +423,10 @@ def partition_effective_checks(
             ignored.append(_ignored_entry(check, SELF_WORKFLOW))
             continue
         status = _check_field(check, "status")
-        name = _check_field(check, "name")
-        if isinstance(status, str) and status.strip().lower() == "cancelled" and isinstance(name, str):
-            newer = [
-                other
-                for other in checks
-                if other is not check
-                and _check_field(other, "name") == name
-                and _is_newer(other, check)
-            ]
+        if isinstance(status, str) and status.strip().lower() == "cancelled":
+            newer = [other for other in checks if other is not check and _supersedes(other, check)]
             if newer:
-                newest = max(
-                    newer,
-                    key=lambda other: (
-                        _strict_int(_check_field(other, "check_run_id")) or 0,
-                        str(_check_field(other, "started_at") or ""),
-                    ),
-                )
+                newest = max(newer, key=lambda other: _strict_int(_check_field(other, "check_run_id")) or 0)
                 ignored.append(_ignored_entry(check, SUPERSEDED_CANCELLED, newest))
                 continue
         effective.append(check)
@@ -765,8 +769,13 @@ def _ignored_checks_are_coherent(payload: Mapping[str, Any]) -> bool:
             status = entry.get("status")
             if not isinstance(status, str) or status.strip().lower() != "cancelled":
                 return False
+            app = entry.get("app_slug")
+            if run_id is None or _strict_int(entry.get("workflow_id")) is None:
+                return False
+            if not isinstance(app, str) or not app:
+                return False
             newer = _strict_int(entry.get("superseded_by_check_run_id"))
-            if run_id is not None and (newer is None or newer <= run_id):
+            if newer is None or newer <= run_id:
                 return False
         else:
             return False

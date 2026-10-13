@@ -23,8 +23,11 @@ BASE = "a" * 40
 MAIN = "c" * 40
 
 
-def _check(name, status, run_id, suite=900, started="2026-10-13T04:00:00Z"):
+def _check(name, status, run_id, suite=900, started="2026-10-13T04:00:00Z", workflow_id=11):
+    # Review follow-up: supersession needs the same app and workflow identity.
     return {
+        "app_slug": "github-actions",
+        "workflow_id": workflow_id,
         "name": name,
         "status": status,
         "head_sha": HEAD,
@@ -156,7 +159,7 @@ def test_base_behind_main_is_informational_and_review_ready():
 
 def test_no_unique_merge_base_keeps_readiness_stale():
     result = ri.classify_readiness(_snapshot(
-        [_check("pytest", "success", 1)], current_main_sha=MAIN, merge_base_unique=False,
+        [_check("pytest", "success", 1)], current_main_sha=MAIN, merge_base_status="NONE",
     ))
     assert "NO_UNIQUE_MERGE_BASE" in result.findings
     assert result.identity.no_unique_merge_base is True
@@ -179,7 +182,7 @@ def test_report_verifier_accepts_review_ready_with_base_behind_main():
 def test_report_verifier_rejects_rehashed_review_ready_without_unique_merge_base():
     from repository_intelligence._hashing import content_hash
 
-    report = _report_item(merge_base_unique=False)
+    report = _report_item(merge_base_status="NONE")
     assert ri.verify_repository_intelligence_report(report) is True
     item = report["items"][0]
     item.update(disposition="REVIEW_READY", is_review_ready=True, findings=[], reasons=[])
@@ -199,10 +202,11 @@ def test_legacy_item_without_merge_base_field_still_needs_fresh_base_for_review_
 
 
 class _BehindMainAPI(FakeGitHubAPI):
-    def __init__(self, *, compare_error=None, runs=None, **kwargs):
+    def __init__(self, *, compare_error=None, runs=None, runs_error=None, **kwargs):
         super().__init__(**kwargs)
         self.compare_error = compare_error
         self.runs = runs
+        self.runs_error = runs_error
 
     def get_json(self, path, params=None):
         if path == "/repos/owner/repo/git/ref/heads/main":
@@ -213,25 +217,24 @@ class _BehindMainAPI(FakeGitHubAPI):
             if self.compare_error:
                 raise self.compare_error
             return {"status": "diverged", "merge_base_commit": {"sha": BASE}}
-        if path == "/repos/owner/repo/actions/runs/42":
-            self.calls.append((path, None))
-            return {"id": 42, "workflow_id": 9, "check_suite_id": 555}
-        if path == "/repos/owner/repo/actions/workflows/9/runs":
+        if path == "/repos/owner/repo/actions/runs":
             self.calls.append((path, dict(params or {})))
+            if self.runs_error:
+                raise self.runs_error
             return {"workflow_runs": self.runs or []}
         return super().get_json(path, params)
 
 
 def test_adapter_resolves_merge_base_when_base_is_behind_main():
     snapshot = gha.collect_pr_snapshot(_BehindMainAPI(), "owner/repo", 7)
-    assert snapshot["merge_base_unique"] is True
+    assert snapshot["merge_base_status"] == "RESOLVED"
     assert snapshot["collection_complete"] is True
 
 
 def test_adapter_marks_no_common_ancestor():
     api = _BehindMainAPI(compare_error=RuntimeError("GitHub HTTP 404: No common ancestor between c and b"))
     snapshot = gha.collect_pr_snapshot(api, "owner/repo", 7)
-    assert snapshot["merge_base_unique"] is False
+    assert snapshot["merge_base_status"] == "NONE"
     bundle = gha.run_cloud_bundle(snapshot)
     assert bundle["reports"]["readiness"]["result"]["disposition"] == "STALE"
     assert gha.verify_cloud_bundle(bundle) is True
@@ -240,38 +243,34 @@ def test_adapter_marks_no_common_ancestor():
 def test_adapter_merge_base_lookup_failure_is_unknown_not_stale():
     api = _BehindMainAPI(compare_error=RuntimeError("GitHub HTTP 502: bad gateway"))
     snapshot = gha.collect_pr_snapshot(api, "owner/repo", 7)
-    assert snapshot["merge_base_unique"] is None
+    assert snapshot["merge_base_status"] == "UNKNOWN"
     assert snapshot["collection_complete"] is True
 
 
 def test_adapter_skips_compare_when_base_is_main():
     api = FakeGitHubAPI()
     snapshot = gha.collect_pr_snapshot(api, "owner/repo", 7)
-    assert snapshot["merge_base_unique"] is True
+    assert snapshot["merge_base_status"] == "RESOLVED"
     assert not any("/compare/" in path for path, _ in api.calls)
 
 
 def test_adapter_collects_own_workflow_check_suites_for_the_head():
     api = _BehindMainAPI(runs=[
-        {"id": 42, "check_suite_id": 555, "head_sha": HEAD},
-        {"id": 41, "check_suite_id": 554, "head_sha": HEAD},
-        {"id": 40, "check_suite_id": 553, "head_sha": "d" * 40},
+        {"id": 42, "check_suite_id": 555, "workflow_id": 9, "head_sha": HEAD},
+        {"id": 41, "check_suite_id": 554, "workflow_id": 9, "head_sha": HEAD},
+        {"id": 39, "check_suite_id": 201, "workflow_id": 8, "head_sha": HEAD},
+        {"id": 40, "check_suite_id": 553, "workflow_id": 9, "head_sha": "d" * 40},
     ])
     snapshot = gha.collect_pr_snapshot(api, "owner/repo", 7, self_run_id=42)
     assert snapshot["self_check_suite_ids"] == [554, 555]
-    runs_call = [p for p, q in api.calls if p.endswith("/workflows/9/runs")]
-    assert runs_call
+    assert [q["head_sha"] for p, q in api.calls if p.endswith("/actions/runs")] == [HEAD]
 
 
-def test_adapter_self_suite_lookup_failure_falls_back_to_current_suite_only():
-    class NoWorkflowRuns(_BehindMainAPI):
-        def get_json(self, path, params=None):
-            if path.endswith("/workflows/9/runs"):
-                raise RuntimeError("GitHub HTTP 403: Resource not accessible by integration")
-            return super().get_json(path, params)
-
-    snapshot = gha.collect_pr_snapshot(NoWorkflowRuns(), "owner/repo", 7, self_run_id=42)
-    assert snapshot["self_check_suite_ids"] == [555]
+def test_adapter_workflow_run_lookup_failure_ignores_nothing():
+    api = _BehindMainAPI(runs_error=RuntimeError("GitHub HTTP 403: Resource not accessible by integration"))
+    snapshot = gha.collect_pr_snapshot(api, "owner/repo", 7, self_run_id=42)
+    assert snapshot["self_check_suite_ids"] == []
+    assert "workflow_id" not in snapshot["checks"][0]
     assert snapshot["collection_complete"] is True
 
 

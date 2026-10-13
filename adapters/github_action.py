@@ -181,10 +181,16 @@ def _validate_repo(repo: str) -> str:
 
 
 
-def _paginate_list(api: GitHubReadAPI, path: str, *, key: str | None = None) -> list[Mapping[str, Any]]:
+def _paginate_list(
+    api: GitHubReadAPI,
+    path: str,
+    *,
+    key: str | None = None,
+    params: Mapping[str, Any] | None = None,
+) -> list[Mapping[str, Any]]:
     out: list[Mapping[str, Any]] = []
     for page in range(1, DEFAULT_MAX_PAGES + 1):
-        value = api.get_json(path, {"per_page": 100, "page": page})
+        value = api.get_json(path, {**(params or {}), "per_page": 100, "page": page})
         rows = value.get(key) if key is not None and isinstance(value, Mapping) else value
         if not isinstance(rows, list):
             raise RuntimeError(f"GitHub pagination shape invalid for {path}")
@@ -249,16 +255,22 @@ def _status_url_matches_subject(
     )
 
 
-def _resolve_merge_base_unique(
+MERGE_BASE_RESOLVED = "RESOLVED"
+MERGE_BASE_NONE = "NONE"
+MERGE_BASE_UNKNOWN = "UNKNOWN"
+
+
+def _resolve_merge_base_status(
     api: GitHubReadAPI, prefix: str, base_sha: str, head_sha: str, current_main_sha: str
-) -> bool | None:
+) -> str:
     """Best-effort merge-base acquisition; the engine decides what it means.
 
-    GitHub resolves at most one merge-base and answers 404 "No common ancestor"
-    when there is none. Any other failure is unknown (None), never a finding.
+    ``RESOLVED`` means GitHub returned a merge-base (the API cannot prove it is
+    unique), ``NONE`` means GitHub answered 404 "No common ancestor", and any
+    other outcome is ``UNKNOWN``. Never a collection error.
     """
     if base_sha == current_main_sha:
-        return True
+        return MERGE_BASE_RESOLVED
     quote = urllib.parse.quote
     path = f"{prefix}/compare/{quote(current_main_sha, safe='')}...{quote(head_sha, safe='')}"
     try:
@@ -266,50 +278,48 @@ def _resolve_merge_base_unique(
     except RuntimeError as exc:
         message = str(exc)
         if message.startswith("GitHub HTTP 404") and "no common ancestor" in message.lower():
-            return False
-        return None
+            return MERGE_BASE_NONE
+        return MERGE_BASE_UNKNOWN
     merge_base = value.get("merge_base_commit") if isinstance(value, Mapping) else None
     sha = merge_base.get("sha") if isinstance(merge_base, Mapping) else None
-    return True if isinstance(sha, str) and sha else None
+    return MERGE_BASE_RESOLVED if isinstance(sha, str) and sha else MERGE_BASE_UNKNOWN
 
 
-def _resolve_self_check_suite_ids(
+def _strict_positive_int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _resolve_workflow_runs(
     api: GitHubReadAPI, prefix: str, head_sha: str, self_run_id: int | None
-) -> list[int]:
-    """Best-effort check-suite ids of this workflow's runs for the PR head.
+) -> tuple[dict[int, tuple[int, str | None]], list[int]]:
+    """Best-effort workflow identity for every Actions check suite on the head.
 
-    These identify the Repository Intelligence workflow's own jobs so the
-    engine can exclude them from PR failure evidence. Failure is non-fatal.
+    One listing (``/actions/runs?head_sha=``) yields ``check_suite_id ->
+    (workflow_id, workflow path)`` and, when ``self_run_id`` is in it, the check
+    suites of this workflow's own runs. Failure leaves both empty (the engine
+    then supersedes nothing and ignores no self checks).
     """
-    if not isinstance(self_run_id, int) or isinstance(self_run_id, bool) or self_run_id <= 0:
-        return []
-    suites: set[int] = set()
     try:
-        run = api.get_json(f"{prefix}/actions/runs/{self_run_id}")
+        rows = _paginate_list(
+            api, f"{prefix}/actions/runs", key="workflow_runs", params={"head_sha": head_sha}
+        )
     except RuntimeError:
-        return []
-    if not isinstance(run, Mapping):
-        return []
-    if isinstance(run.get("check_suite_id"), int):
-        suites.add(int(run["check_suite_id"]))
-    workflow_id = run.get("workflow_id")
-    if isinstance(workflow_id, int) and not isinstance(workflow_id, bool):
-        try:
-            listing = api.get_json(
-                f"{prefix}/actions/workflows/{workflow_id}/runs",
-                {"head_sha": head_sha, "per_page": 100},
-            )
-        except RuntimeError:
-            listing = None
-        rows = listing.get("workflow_runs") if isinstance(listing, Mapping) else None
-        for row in rows if isinstance(rows, list) else ():
-            if (
-                isinstance(row, Mapping)
-                and row.get("head_sha") == head_sha
-                and isinstance(row.get("check_suite_id"), int)
-            ):
-                suites.add(int(row["check_suite_id"]))
-    return sorted(suites)
+        return {}, []
+    suites: dict[int, tuple[int, str | None]] = {}
+    own_workflow: int | None = None
+    for row in rows:
+        if row.get("head_sha") != head_sha:
+            continue
+        suite = _strict_positive_int(row.get("check_suite_id"))
+        workflow_id = _strict_positive_int(row.get("workflow_id"))
+        if suite is None or workflow_id is None:
+            continue
+        path = row.get("path") if isinstance(row.get("path"), str) else None
+        suites[suite] = (workflow_id, path)
+        if self_run_id is not None and row.get("id") == self_run_id:
+            own_workflow = workflow_id
+    self_suites = sorted(suite for suite, (wf, _) in suites.items() if wf == own_workflow)
+    return suites, self_suites
 
 
 def collect_pr_snapshot(
@@ -369,6 +379,8 @@ def collect_pr_snapshot(
         else:
             collection_errors.append("changed_files: missing filename")
 
+    workflow_suites, self_suites = _resolve_workflow_runs(api, prefix, head_sha, self_run_id)
+
     checks: list[dict[str, Any]] = []
     for row in check_rows:
         name = row.get("name")
@@ -401,6 +413,9 @@ def collect_pr_snapshot(
             "annotation_count": output.get("annotations_count"),
             "app_slug": app.get("slug"),
         }
+        suite_id = _strict_positive_int(check_suite.get("id"))
+        if suite_id is not None and suite_id in workflow_suites:
+            optional["workflow_id"], optional["workflow_path"] = workflow_suites[suite_id]
         for key, value in optional.items():
             if value is not None:
                 check[key] = value
@@ -516,10 +531,10 @@ def collect_pr_snapshot(
         "collection_errors": collection_errors,
         "created_at": str(pr.get("created_at") or ""),
         "updated_at": str(pr.get("updated_at") or ""),
-        "merge_base_unique": _resolve_merge_base_unique(
+        "merge_base_status": _resolve_merge_base_status(
             api, prefix, base_sha, head_sha, current_main_sha
         ),
-        "self_check_suite_ids": _resolve_self_check_suite_ids(api, prefix, head_sha, self_run_id),
+        "self_check_suite_ids": self_suites,
     }
     return snapshot
 

@@ -67,7 +67,7 @@ def _report_payload():
         repository="owner/repo", pr_number=1, title="t", state="open", draft=True, mergeable=True,
         base_branch="main", base_sha="base1", head_branch="f", head_sha="head1",
         current_main_sha="main2", changed_files=("a.py",), checks=(CheckObservation(name="ci", status="success"),),
-        merge_base_unique=False,
+        merge_base_status="NONE",
     )
     return ri.build_repository_intelligence_report([pr]).to_dict()
 
