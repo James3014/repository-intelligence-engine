@@ -953,6 +953,14 @@ _READINESS_STALE_KEYS = (
 
 
 def readiness_item_is_coherent(item: Mapping[str, Any]) -> bool:
+    """Fail closed (never raise) on any malformed or non-derivable readiness item."""
+    try:
+        return _readiness_item_is_coherent(item)
+    except (TypeError, ValueError, AttributeError, KeyError, IndexError):
+        return False
+
+
+def _readiness_item_is_coherent(item: Mapping[str, Any]) -> bool:
     """Fail closed when a readiness item's REVIEW_READY claim is not derivable.
 
     Re-derives ``is_review_ready`` exactly as ``RepositoryReadinessItem`` does and
@@ -1025,7 +1033,19 @@ def _readiness_item_is_rederivable(
     item_gaps = item.get("evidence_gaps")
     if not isinstance(findings, list) or not isinstance(item_gaps, list):
         return False
+    if not all(isinstance(f, str) for f in findings) or not all(isinstance(g, str) for g in item_gaps):
+        return False
+    overlaps = item.get("overlaps")
+    if not isinstance(overlaps, Mapping):
+        return False
+    for key, paths in overlaps.items():
+        if int(key) <= 0 or not isinstance(paths, list) or not paths:
+            return False
+        if not all(isinstance(path, str) for path in paths):
+            return False
     found = set(findings)
+    if (len(overlaps) > 0) is not ("PATH_OVERLAP" in found):
+        return False
 
     # R1: findings mirror the identity flags, and disposition is a pure
     # function of findings (plus the invalid-identity override).
@@ -1052,22 +1072,31 @@ def _readiness_item_is_rederivable(
         ):
             return False
 
-    # R3: completeness follows from validity, findings and gaps.
-    if gaps and completeness != EvidenceCompleteness.INCOMPLETE.value:
-        return False
-    if "COLLECTION_INCOMPLETE" in found and completeness != EvidenceCompleteness.INCOMPLETE.value:
-        return False
-    if "MERGEABLE_UNKNOWN" in found and completeness == EvidenceCompleteness.COMPLETE.value:
-        return False
-    if completeness == EvidenceCompleteness.COMPLETE.value:
-        # The builder keeps COMPLETE when only the informational merge-base gap
-        # is present; any other gap (identity, collection, mergeable) downgrades.
-        informational = (
-            ["merge-base with current main unknown"] if "MERGE_BASE_UNKNOWN" in found else []
-        )
-        if item_gaps != informational:
-            return False
+    # R3: completeness and the informational gaps follow from findings/gaps,
+    # mirroring _classify_snapshot exactly.
+    merge_base_gap = "merge-base with current main unknown"
+    mergeable_gap = "mergeable state unknown"
     if any(g not in item_gaps for g in gaps):
+        return False
+    if ("MERGE_BASE_UNKNOWN" in found) is not (merge_base_gap in item_gaps):
+        return False
+    if ("MERGEABLE_UNKNOWN" in found) is not (mergeable_gap in item_gaps):
+        return False
+    # MERGE_BASE_UNKNOWN is only emitted for a base behind main, never together
+    # with a proven missing merge-base.
+    if "MERGE_BASE_UNKNOWN" in found and (
+        not flags["stale_base"] or "NO_UNIQUE_MERGE_BASE" in found
+    ):
+        return False
+    if gaps or "COLLECTION_INCOMPLETE" in found:
+        expected_completeness = EvidenceCompleteness.INCOMPLETE
+    elif "MERGEABLE_UNKNOWN" in found or any(
+        g not in (merge_base_gap, mergeable_gap) for g in item_gaps
+    ):
+        expected_completeness = EvidenceCompleteness.PARTIAL
+    else:
+        expected_completeness = EvidenceCompleteness.COMPLETE
+    if completeness != expected_completeness.value:
         return False
     return True
 
@@ -1203,7 +1232,55 @@ def verify_repository_intelligence_report(payload: Mapping[str, Any]) -> bool:
         item_pr = item.get("pr_number")
         if isinstance(item_pr, bool) or not isinstance(item_pr, int) or item_pr != identity.get("pr_number"):
             return False
-    return _report_aggregates_match(payload, items)
+    return _report_aggregates_match(payload, items) and _report_overlaps_match(items)
+
+
+def _item_base_disposition(item: Mapping[str, Any]) -> Disposition:
+    if not item["identity"]["is_valid"]:
+        return Disposition.NEEDS_ATTENTION
+    return _disposition_from_findings(item["findings"])
+
+
+def _report_overlaps_match(items: Sequence[Mapping[str, Any]]) -> bool:
+    """Re-derive the cross-PR WAIT_REBIND demotion from the recorded overlaps.
+
+    The payload carries each item's ``overlaps`` (PR number -> shared paths) but
+    not changed_files or issue numbers, so the overlap graph itself is taken from
+    the payload and must be symmetric, agree with PATH_OVERLAP, and demote every
+    mutually eligible pair exactly as overlap.detect does. SAME_ISSUE_CHAIN
+    demotions cannot be re-derived (no issue numbers) and are accepted only with
+    that finding present.
+    """
+    by_pr: dict[int, Mapping[str, Any]] = {}
+    for item in items:
+        by_pr[item["identity"]["pr_number"]] = item
+    if len(by_pr) != len(items):
+        return False
+    graph: dict[int, dict[int, list[str]]] = {}
+    for item in items:
+        pr = item["identity"]["pr_number"]
+        raw = item["overlaps"]
+        graph[pr] = {int(k): list(v) for k, v in raw.items()}
+        if (len(raw) > 0) is not ("PATH_OVERLAP" in item["findings"]):
+            return False
+    for pr, edges in graph.items():
+        for other, paths in edges.items():
+            if other == pr or not paths:
+                return False
+            if other in graph and graph[other].get(pr) != paths:
+                return False
+    eligible = {
+        pr: _item_base_disposition(by_pr[pr]) == Disposition.REVIEW_READY for pr in graph
+    }
+    for pr, item in by_pr.items():
+        demoted = eligible[pr] and any(eligible.get(other) for other in graph[pr])
+        if demoted and item["disposition"] != Disposition.WAIT_REBIND.value:
+            return False
+        if item["disposition"] == Disposition.WAIT_REBIND.value and not (
+            demoted or "SAME_ISSUE_CHAIN" in item["findings"]
+        ):
+            return False
+    return True
 
 
 def _report_aggregates_match(payload: Mapping[str, Any], items: Sequence[Mapping[str, Any]]) -> bool:

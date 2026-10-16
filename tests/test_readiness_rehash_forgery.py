@@ -353,3 +353,221 @@ def test_rehashed_report_is_rejected(mutate):
     assert ri.verify_repository_intelligence_report(report) is True
     mutate(report)
     assert ri.verify_repository_intelligence_report(_rehash_report(report)) is False
+
+
+# ------------------------------------------------- cross-model review round 1
+
+def _snapshot(api_cls=ResolvedAPI, **overrides):
+    snap = dict(gha.collect_pr_snapshot(api_cls(), "owner/repo", 7))
+    snap.update(overrides)
+    return snap
+
+
+GENUINE_BUNDLE_VARIANTS = {
+    "declared_head_empty": dict(declared_head_sha=""),
+    "declared_base_empty": dict(declared_base_sha=""),
+    "declared_main_empty": dict(declared_main_sha=""),
+    "declared_all_empty": dict(declared_head_sha="", declared_base_sha="", declared_main_sha=""),
+    "declared_all_none": dict(declared_head_sha=None, declared_base_sha=None, declared_main_sha=None),
+    "declared_head_stale": dict(declared_head_sha="x" * 40),
+    "draft": dict(draft=True),
+    "mergeable_unknown": dict(mergeable=None),
+    "collection_incomplete": dict(collection_complete=False),
+    "collection_errors": dict(collection_errors=["boom"]),
+    "do_not_merge": dict(do_not_merge=True),
+}
+
+
+@pytest.mark.parametrize("name", sorted(GENUINE_BUNDLE_VARIANTS))
+@pytest.mark.parametrize("api_cls", [MergeBaseAPI, ResolvedAPI])
+def test_genuine_bundle_variants_verify(api_cls, name):
+    bundle = gha.run_cloud_bundle(_snapshot(api_cls, **GENUINE_BUNDLE_VARIANTS[name]))
+    assert gha.verify_cloud_bundle(bundle) is True
+
+
+def _overlap_report():
+    snaps = [_pr(1, changed_files=("x.py",)), _pr(2, changed_files=("x.py",))]
+    return ri.build_repository_intelligence_report(snaps).to_dict()
+
+
+def test_genuine_overlap_report_is_wait_rebind_and_verifies():
+    report = _overlap_report()
+    assert [i["disposition"] for i in report["items"]] == ["WAIT_REBIND", "WAIT_REBIND"]
+    assert ri.verify_repository_intelligence_report(report) is True
+
+
+def _o_both_ready(report):
+    for it in report["items"]:
+        _force_ready(it)
+
+
+def _o_one_ready(report):
+    _force_ready(report["items"][0])
+
+
+def _o_overlaps_dropped_one_sided(report):
+    _force_ready(report["items"][0])
+    report["items"][0]["overlaps"] = {}
+    report["items"][0]["findings"] = [f for f in report["items"][0]["findings"] if f != "PATH_OVERLAP"]
+
+
+def _o_overlaps_asymmetric(report):
+    report["items"][1]["overlaps"] = {}
+    report["items"][1]["findings"] = [f for f in report["items"][1]["findings"] if f != "PATH_OVERLAP"]
+
+
+def _o_path_overlap_finding_without_overlaps(report):
+    report["items"][0]["overlaps"] = {}
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [_o_both_ready, _o_one_ready, _o_overlaps_dropped_one_sided, _o_overlaps_asymmetric,
+     _o_path_overlap_finding_without_overlaps],
+    ids=lambda f: f.__name__,
+)
+def test_rehashed_overlap_forgery_is_rejected(mutate):
+    report = copy.deepcopy(_overlap_report())
+    mutate(report)
+    assert ri.verify_repository_intelligence_report(_rehash_report(report)) is False
+
+
+def _clean_report():
+    return ri.build_repository_intelligence_report([_pr()]).to_dict()
+
+
+def _m_findings_dict_element(report):
+    _item0(report)["findings"] = [{}]
+
+
+def _m_findings_not_list(report):
+    _item0(report)["findings"] = "DRAFT"
+
+
+def _m_findings_unhashable_nested(report):
+    _item0(report)["findings"] = [["x"]]
+
+
+def _m_identity_not_dict(report):
+    _item0(report)["identity"] = []
+
+
+def _m_identity_key_missing(report):
+    del _item0(report)["identity"]["is_valid"]
+
+
+def _m_identity_gaps_non_str(report):
+    _item0(report)["identity"]["evidence_gaps"] = [{}]
+
+
+def _m_item_gaps_non_str(report):
+    _item0(report)["evidence_gaps"] = [{}]
+
+
+def _m_overlaps_bad(report):
+    _item0(report)["overlaps"] = {"1": [{}]}
+
+
+def _m_completeness_missing(report):
+    del _item0(report)["evidence_completeness"]
+
+
+def _m_repo_non_str(report):
+    _item0(report)["identity"]["repository"] = {}
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [_m_findings_dict_element, _m_findings_not_list, _m_findings_unhashable_nested,
+     _m_identity_not_dict, _m_identity_key_missing, _m_identity_gaps_non_str,
+     _m_item_gaps_non_str, _m_overlaps_bad, _m_completeness_missing, _m_repo_non_str],
+    ids=lambda f: f.__name__,
+)
+def test_malformed_input_returns_false_not_raises(mutate):
+    report = copy.deepcopy(_clean_report())
+    mutate(report)
+    assert ri.verify_repository_intelligence_report(_rehash_report(report)) is False
+    bundle = copy.deepcopy(_bundle(ResolvedAPI))
+    # Same mutation shape applied to the bundle's readiness result.
+    wrapper = {"items": [bundle["reports"]["readiness"]["result"]]}
+    mutate(wrapper)
+    assert gha.verify_cloud_bundle(_rehash_bundle(bundle)) is False
+
+
+def _b_merge_base_unknown_on_fresh_base(report):
+    it = _item0(report)
+    it["findings"] = list(it["findings"]) + ["MERGE_BASE_UNKNOWN"]
+    it["evidence_gaps"] = ["merge-base with current main unknown"]
+    _force_ready(it)
+
+
+def _b_merge_base_gap_without_finding(report):
+    _item0(report)["evidence_gaps"] = ["merge-base with current main unknown"]
+
+
+def _b_unknown_and_none_together(report):
+    it = _item0(report)
+    it["identity"]["base_sha"] = "b" * 8
+    it["identity"]["review_identity"][3] = "b" * 8
+    it["identity"]["stale_base"] = True
+    it["findings"] = ["STALE_BASE", "MERGE_BASE_UNKNOWN", "NO_UNIQUE_MERGE_BASE"]
+    it["identity"]["no_unique_merge_base"] = True
+    it["disposition"] = "STALE"
+    it["is_review_ready"] = False
+    it["evidence_gaps"] = ["merge-base with current main unknown"]
+
+
+def _b_mergeable_gap_without_finding(report):
+    it = _item0(report)
+    it["evidence_gaps"] = ["mergeable state unknown"]
+    it["evidence_completeness"] = "PARTIAL"
+    report["evidence_completeness"] = "PARTIAL"
+    report["evidence_gaps"] = ["pr:1:mergeable state unknown"]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [_b_merge_base_unknown_on_fresh_base, _b_merge_base_gap_without_finding,
+     _b_unknown_and_none_together, _b_mergeable_gap_without_finding],
+    ids=lambda f: f.__name__,
+)
+def test_finding_preconditions_are_checked(mutate):
+    report = copy.deepcopy(_clean_report())
+    mutate(report)
+    report["evidence_gaps"] = [f"pr:1:{g}" for g in _item0(report)["evidence_gaps"]]
+    assert ri.verify_repository_intelligence_report(_rehash_report(report)) is False
+
+
+def _p_partial_no_gaps(report):
+    _item0(report)["evidence_completeness"] = "PARTIAL"
+    report["evidence_completeness"] = "PARTIAL"
+
+
+def _p_complete_but_collection_errors(report):
+    # genuine item is PARTIAL because of a collection error; claim COMPLETE
+    it = _item0(report)
+    it["evidence_completeness"] = "COMPLETE"
+    report["evidence_completeness"] = "COMPLETE"
+
+
+def _p_mergeable_unknown_marked_complete(report):
+    it = _item0(report)
+    it["evidence_completeness"] = "COMPLETE"
+    report["evidence_completeness"] = "COMPLETE"
+
+
+@pytest.mark.parametrize("mutate", [_p_partial_no_gaps], ids=lambda f: f.__name__)
+def test_partial_completeness_must_be_derivable(mutate):
+    report = copy.deepcopy(_clean_report())
+    mutate(report)
+    assert ri.verify_repository_intelligence_report(_rehash_report(report)) is False
+
+
+@pytest.mark.parametrize("mutate", [_p_complete_but_collection_errors, _p_mergeable_unknown_marked_complete],
+                         ids=lambda f: f.__name__)
+@pytest.mark.parametrize("snap", [_pr(collection_errors=("boom",)), _pr(mergeable=None)], ids=["errors", "unknown"])
+def test_downgraded_partial_is_rejected(mutate, snap):
+    report = ri.build_repository_intelligence_report([snap]).to_dict()
+    assert _item0(report)["evidence_completeness"] == "PARTIAL"
+    mutate(report)
+    assert ri.verify_repository_intelligence_report(_rehash_report(report)) is False
