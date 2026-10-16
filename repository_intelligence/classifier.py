@@ -5,7 +5,8 @@ from .contracts import (
 )
 from .models import *
 
-DEFAULT_AUTHORITY_PATTERNS = ("AGENTS.md", "docs/agents/", "docs/governance/", "policy/")
+# Generic protected-path policy defaults empty; consumers inject their own patterns.
+DEFAULT_AUTHORITY_PATTERNS: tuple[str, ...] = ()
 
 
 def classify(pr, authority_patterns=DEFAULT_AUTHORITY_PATTERNS):
