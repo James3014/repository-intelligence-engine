@@ -1049,7 +1049,12 @@ def _readiness_item_is_rederivable(
 
     # R1: findings mirror the identity flags, and disposition is a pure
     # function of findings (plus the invalid-identity override).
-    if not legacy and ("STALE_BASE" in found) is not flags["stale_base"]:
+    # The classifier adds STALE_BASE on any base != main (even with an empty SHA),
+    # unlike the stale_base flag which needs both SHAs; mirror the classifier.
+    base_differs = identity.get("base_sha") != identity.get("current_main_sha")
+    # For an invalid identity (disposition is forced to NEEDS_ATTENTION anyway) a
+    # None SHA is coerced to "" in the identity, so the finding is not re-derivable.
+    if not gaps and ("STALE_BASE" in found) is not base_differs:
         return False
     if ("STALE_EVIDENCE" in found) is not flags["stale_evidence"]:
         return False
@@ -1085,7 +1090,7 @@ def _readiness_item_is_rederivable(
     # MERGE_BASE_UNKNOWN is only emitted for a base behind main, never together
     # with a proven missing merge-base.
     if "MERGE_BASE_UNKNOWN" in found and (
-        not flags["stale_base"] or "NO_UNIQUE_MERGE_BASE" in found
+        (not base_differs and not gaps) or "NO_UNIQUE_MERGE_BASE" in found
     ):
         return False
     if gaps or "COLLECTION_INCOMPLETE" in found:

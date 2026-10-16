@@ -90,6 +90,26 @@ GENUINE_SNAPSHOTS = {
     "mixed_main": [_pr(1), _pr(2, current_main_sha="z" * 8, base_sha="z" * 8)],
     "mixed_repository": [_pr(1), _pr(2, repository="owner/other")],
     "empty": [],
+    "empty_base_sha": [_pr(base_sha="")],
+    "empty_main_sha": [_pr(current_main_sha="")],
+    "empty_head_sha_stale_base": [_pr(head_sha="", base_sha="b" * 8)],
+    "empty_base_and_main": [_pr(base_sha="", current_main_sha="")],
+    "empty_base_among_valid": [_pr(1), _pr(2, base_sha=""), _pr(3, current_main_sha="")],
+    "empty_base_no_merge_base": [_pr(base_sha="", merge_base_status="NONE")],
+    "empty_base_resolved": [_pr(base_sha="", merge_base_status="RESOLVED")],
+    "none_base_sha": [_pr(base_sha=None)],
+    "none_main_sha": [_pr(current_main_sha=None)],
+    "none_base_empty_main": [_pr(base_sha=None, current_main_sha="")],
+    "mapping_empty_base": [dict(
+        repository="owner/repo", pr_number=1, title="t", state="open", draft=False,
+        mergeable=True, base_branch="main", base_sha="", head_branch="f", head_sha="h1",
+        current_main_sha="m", changed_files=["a.py"], checks=[],
+    )],
+    "mapping_empty_main": [dict(
+        repository="owner/repo", pr_number=1, title="t", state="open", draft=False,
+        mergeable=True, base_branch="main", base_sha="b", head_branch="f", head_sha="h1",
+        current_main_sha="", changed_files=["a.py"], checks=[],
+    )],
 }
 
 
