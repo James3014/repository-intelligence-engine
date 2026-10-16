@@ -14,6 +14,7 @@ Systemic-signal hardening (follow-up to #98).
 - `systemic`: the report gains `suppressed_by_cutoff` and a `notes` entry "N failures suppressed by cutoff" so a cutoff-suppressed result is visible; the verifier rejects a malformed count or note.
 - `systemic`: checks without a workflow path are keyed `("app:<app_slug>", name)`, or `("status", name)` when there is no app, instead of collapsing into `("", name)`; commit statuses no longer merge across apps or clear unrelated checks.
 - `verify_ci_failure_evidence` cross-checks `unexpected_count` / `expected_count` against the listed failures, rejecting re-hashed payloads with inconsistent counts.
+- `verify_repository_intelligence_report` / `verify_cloud_bundle` re-derive readiness disposition, identity flags and report completeness from the payload and require matching cfi/eia identities, rejecting re-hashed REVIEW_READY forgeries (#86).
 - `pyproject.toml` version is `0.1.6`.
 
 ## [0.1.5] - Unreleased (tag after merge)
