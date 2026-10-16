@@ -4,7 +4,7 @@ All notable changes to Repository Intelligence Engine are documented here.
 
 The project follows semantic versioning while it remains in the `0.x` series. Immutable release tags are never moved after publication.
 
-## [0.1.6] - Unreleased (tag after merge)
+## [0.1.6] - 2026-10-13
 
 Systemic-signal hardening (follow-up to #98).
 
@@ -17,7 +17,7 @@ Systemic-signal hardening (follow-up to #98).
 - `verify_repository_intelligence_report` / `verify_cloud_bundle` re-derive readiness disposition, identity flags and report completeness from the payload and require matching cfi/eia identities, rejecting re-hashed REVIEW_READY forgeries (#86); reports with duplicate PR numbers intentionally fail verification.
 - `pyproject.toml` version is `0.1.6`.
 
-## [0.1.5] - Unreleased (tag after merge)
+## [0.1.5] - 2026-10-13
 
 Signal-quality release for consumers that surface Repository Intelligence to humans (Issue #98).
 

@@ -14,7 +14,7 @@ It answers questions such as:
 
 The engine is deliberately **advisory-only**. It can describe repository state and produce hash-bound evidence, but it cannot approve, merge, release, publish, dispatch workers, or execute pull-request source.
 
-Current release: **`v0.1.4`**
+Current release: **`v0.1.6`**
 
 License: **Apache-2.0**
 
@@ -431,7 +431,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - id: ri
-        uses: James3014/repository-intelligence-engine@v0.1.4
+        uses: James3014/repository-intelligence-engine@v0.1.6
 
       - uses: actions/upload-artifact@v4
         with:
@@ -499,14 +499,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - id: ri
-        uses: James3014/repository-intelligence-engine@v0.1.4
+        uses: James3014/repository-intelligence-engine@v0.1.6
 
   terminal:
     needs: snapshot
     runs-on: ubuntu-latest
     steps:
       - id: ri-terminal
-        uses: James3014/repository-intelligence-engine/terminal@v0.1.4
+        uses: James3014/repository-intelligence-engine/terminal@v0.1.6
         with:
           pr-number: ${{ github.event.pull_request.number }}
           expected-head-sha: ${{ github.event.pull_request.head.sha }}
@@ -528,7 +528,7 @@ Install directly from the immutable release tag:
 
 ```bash
 python3 -m pip install \
-  "git+https://github.com/James3014/repository-intelligence-engine.git@v0.1.4"
+  "git+https://github.com/James3014/repository-intelligence-engine.git@v0.1.6"
 ```
 
 Then:
@@ -935,7 +935,7 @@ You do **not** copy the engine into each repository. All consumers should depend
 For CI and automation, prefer immutable version pinning:
 
 ```yaml
-uses: James3014/repository-intelligence-engine@v0.1.4
+uses: James3014/repository-intelligence-engine@v0.1.6
 ```
 
 For environments that require a commit-level pin, use the release commit associated with the tag.
@@ -1023,7 +1023,7 @@ A higher-level controller may use Repository Intelligence as evidence, but autho
 
 ## Current status
 
-`v0.1.4` is the current release and packages the eleven-operation
+`v0.1.6` is the current release and packages the eleven-operation
 independent consumer product (`facts`, `query`, `knowledge`, and `guard-delta` added since `v0.1.2`), check-role classification, and bounded GitHub rate-limit handling:
 
 - canonical engine / CLI / GitHub Action are hosted in this repository;
