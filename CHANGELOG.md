@@ -10,7 +10,7 @@ The project follows semantic versioning while it remains in the `0.x` series. Im
 
 - `classifier.DEFAULT_AUTHORITY_PATTERNS` is now `()` (Issue #80). `classify()` no longer treats `AGENTS.md`, `docs/agents/`, `docs/governance/` and `policy/` as protected by default, matching the README ("Generic protected-path policy defaults empty and may be explicitly injected by a consumer"). The name stays importable. Callers that relied on the old default must pass `authority_patterns=("AGENTS.md", "docs/agents/", "docs/governance/", "policy/")` explicitly; `classify_readiness` / the CLI already default to the empty policy.
 
-## [0.1.6] - Unreleased (tag after merge)
+## [0.1.6] - 2026-10-13
 
 Systemic-signal hardening (follow-up to #98).
 
@@ -23,7 +23,7 @@ Systemic-signal hardening (follow-up to #98).
 - `verify_repository_intelligence_report` / `verify_cloud_bundle` re-derive readiness disposition, identity flags and report completeness from the payload and require matching cfi/eia identities, rejecting re-hashed REVIEW_READY forgeries (#86); reports with duplicate PR numbers intentionally fail verification.
 - `pyproject.toml` version is `0.1.6`.
 
-## [0.1.5] - Unreleased (tag after merge)
+## [0.1.5] - 2026-10-13
 
 Signal-quality release for consumers that surface Repository Intelligence to humans (Issue #98).
 
