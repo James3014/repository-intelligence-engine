@@ -58,9 +58,50 @@ def _validate_repo_format(repo: str) -> bool:
 
 
 
+def _derive_identity_flags(
+    *,
+    repository: Any,
+    pr_number: Any,
+    head_sha: Any,
+    base_sha: Any,
+    current_main_sha: Any,
+    declared_base: Any,
+    declared_head: Any,
+    declared_main: Any,
+) -> tuple[list[str], dict[str, bool]]:
+    """Pure derivation of identity gaps and stale flags from identity fields.
+
+    Shared by ``revision_identity`` (builder) and the report verifiers so a
+    payload cannot self-declare flags that its own fields contradict.
+    """
+    gaps: list[str] = []
+    if not _validate_repo_format(repository):
+        gaps.append("repository domain or format invalid")
+    if not isinstance(pr_number, int) or pr_number <= 0:
+        gaps.append("pr_number must be a positive integer")
+    if not isinstance(head_sha, str) or not head_sha:
+        gaps.append("head_sha missing or invalid")
+    if not isinstance(base_sha, str) or not base_sha:
+        gaps.append("base_sha missing or invalid")
+    if not isinstance(current_main_sha, str) or not current_main_sha:
+        gaps.append("current_main_sha missing or invalid")
+
+    stale_base = bool(base_sha and current_main_sha and base_sha != current_main_sha)
+    stale_declared_base = bool(declared_base and declared_base != base_sha)
+    stale_declared_head = bool(declared_head and declared_head != head_sha)
+    stale_declared_main = bool(declared_main and declared_main != current_main_sha)
+    stale_evidence = bool(stale_declared_base or stale_declared_head or stale_declared_main)
+    return gaps, {
+        "stale_base": stale_base,
+        "stale_declared_base": stale_declared_base,
+        "stale_declared_head": stale_declared_head,
+        "stale_declared_main": stale_declared_main,
+        "stale_evidence": stale_evidence,
+    }
+
+
 def revision_identity(snapshot: PRSnapshot | Mapping[str, Any] | Any) -> RevisionIdentity:
     """Extract and validate deterministic revision identity and stale markers."""
-    gaps: list[str] = []
 
     if isinstance(snapshot, PRSnapshot):
         repository = snapshot.repository
@@ -93,23 +134,21 @@ def revision_identity(snapshot: PRSnapshot | Mapping[str, Any] | Any) -> Revisio
         declared_main = getattr(snapshot, "declared_main_sha", None) or getattr(snapshot, "declared_main", None)
         merge_base_status = getattr(snapshot, "merge_base_status", None)
 
-    if not _validate_repo_format(repository):
-        gaps.append("repository domain or format invalid")
-    if not isinstance(pr_number, int) or pr_number <= 0:
-        gaps.append("pr_number must be a positive integer")
-    if not isinstance(head_sha, str) or not head_sha:
-        gaps.append("head_sha missing or invalid")
-    if not isinstance(base_sha, str) or not base_sha:
-        gaps.append("base_sha missing or invalid")
-    if not isinstance(current_main_sha, str) or not current_main_sha:
-        gaps.append("current_main_sha missing or invalid")
-
-    stale_base = bool(base_sha and current_main_sha and base_sha != current_main_sha)
-    stale_declared_base = bool(declared_base and declared_base != base_sha)
-    stale_declared_head = bool(declared_head and declared_head != head_sha)
-    stale_declared_main = bool(declared_main and declared_main != current_main_sha)
-    stale_evidence = bool(stale_declared_base or stale_declared_head or stale_declared_main)
-
+    gaps, flags = _derive_identity_flags(
+        repository=repository,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        base_sha=base_sha,
+        current_main_sha=current_main_sha,
+        declared_base=declared_base,
+        declared_head=declared_head,
+        declared_main=declared_main,
+    )
+    stale_base = flags["stale_base"]
+    stale_declared_base = flags["stale_declared_base"]
+    stale_declared_head = flags["stale_declared_head"]
+    stale_declared_main = flags["stale_declared_main"]
+    stale_evidence = flags["stale_evidence"]
     is_valid = len(gaps) == 0
 
     return RevisionIdentity(
@@ -170,9 +209,7 @@ def _resolve_policy(
     return RepositoryIntelligencePolicyV1()
 
 
-def _recompute_disposition(classification: Classification) -> None:
-    findings = set(classification.findings)
-    blockers = {
+_DISPOSITION_BLOCKERS = frozenset({
         "NO_UNIQUE_MERGE_BASE",
         "STALE_EVIDENCE",
         "DRAFT",
@@ -181,17 +218,25 @@ def _recompute_disposition(classification: Classification) -> None:
         "DO_NOT_MERGE",
         "STALE_LONG_LIVED",
         "COLLECTION_INCOMPLETE",
-    }
-    if not (findings & blockers):
-        classification.disposition = Disposition.REVIEW_READY
-    elif "DO_NOT_MERGE" in findings:
-        classification.disposition = Disposition.EVIDENCE_ONLY
-    elif "DRAFT" in findings or "NON_MERGEABLE" in findings:
-        classification.disposition = Disposition.EXCLUDED
-    elif findings & {"STALE_LONG_LIVED", "NO_UNIQUE_MERGE_BASE", "STALE_EVIDENCE"}:
-        classification.disposition = Disposition.STALE
-    else:
-        classification.disposition = Disposition.NEEDS_ATTENTION
+})
+
+
+def _disposition_from_findings(findings: Any) -> Disposition:
+    """Pure disposition derivation shared by the builder and the verifiers."""
+    found = set(findings)
+    if not (found & _DISPOSITION_BLOCKERS):
+        return Disposition.REVIEW_READY
+    if "DO_NOT_MERGE" in found:
+        return Disposition.EVIDENCE_ONLY
+    if "DRAFT" in found or "NON_MERGEABLE" in found:
+        return Disposition.EXCLUDED
+    if found & {"STALE_LONG_LIVED", "NO_UNIQUE_MERGE_BASE", "STALE_EVIDENCE"}:
+        return Disposition.STALE
+    return Disposition.NEEDS_ATTENTION
+
+
+def _recompute_disposition(classification: Classification) -> None:
+    classification.disposition = _disposition_from_findings(classification.findings)
 
 
 def _classify_snapshot(
@@ -908,6 +953,14 @@ _READINESS_STALE_KEYS = (
 
 
 def readiness_item_is_coherent(item: Mapping[str, Any]) -> bool:
+    """Fail closed (never raise) on any malformed or non-derivable readiness item."""
+    try:
+        return _readiness_item_is_coherent(item)
+    except (TypeError, ValueError, AttributeError, KeyError, IndexError):
+        return False
+
+
+def _readiness_item_is_coherent(item: Mapping[str, Any]) -> bool:
     """Fail closed when a readiness item's REVIEW_READY claim is not derivable.
 
     Re-derives ``is_review_ready`` exactly as ``RepositoryReadinessItem`` does and
@@ -940,6 +993,119 @@ def readiness_item_is_coherent(item: Mapping[str, Any]) -> bool:
         elif identity.get("stale_base") is not False:
             return False
     if "no_unique_merge_base" in identity and not isinstance(identity.get("no_unique_merge_base"), bool):
+        return False
+    return _readiness_item_is_rederivable(item, identity, disposition, completeness)
+
+
+def _readiness_item_is_rederivable(
+    item: Mapping[str, Any],
+    identity: Mapping[str, Any],
+    disposition: Any,
+    completeness: str,
+) -> bool:
+    """Re-derive identity flags, disposition and completeness from the payload."""
+    # R2: identity flags/validity follow from the identity's own fields.
+    gaps, flags = _derive_identity_flags(
+        repository=identity.get("repository"),
+        pr_number=identity.get("pr_number"),
+        head_sha=identity.get("head_sha"),
+        base_sha=identity.get("base_sha"),
+        current_main_sha=identity.get("current_main_sha"),
+        declared_base=identity.get("declared_base_sha"),
+        declared_head=identity.get("declared_head_sha"),
+        declared_main=identity.get("declared_main_sha"),
+    )
+    # Legacy items (no ``no_unique_merge_base`` key) predate #98 and gate
+    # REVIEW_READY on the declared ``stale_base`` itself, so that one flag is
+    # not re-derived for them.
+    legacy = "no_unique_merge_base" not in identity
+    for key, value in flags.items():
+        if legacy and key == "stale_base":
+            continue
+        if identity.get(key) is not value:
+            return False
+    if identity.get("is_valid") is not (not gaps):
+        return False
+    if identity.get("evidence_gaps") != gaps:
+        return False
+
+    findings = item.get("findings")
+    item_gaps = item.get("evidence_gaps")
+    if not isinstance(findings, list) or not isinstance(item_gaps, list):
+        return False
+    if not all(isinstance(f, str) for f in findings) or not all(isinstance(g, str) for g in item_gaps):
+        return False
+    overlaps = item.get("overlaps")
+    if not isinstance(overlaps, Mapping):
+        return False
+    for key, paths in overlaps.items():
+        # The key only has to parse: an invalid-identity PR (number <= 0) can overlap.
+        int(key)
+        if not isinstance(paths, list) or not paths:
+            return False
+        if not all(isinstance(path, str) for path in paths):
+            return False
+    found = set(findings)
+    if (len(overlaps) > 0) is not ("PATH_OVERLAP" in found):
+        return False
+
+    # R1: findings mirror the identity flags, and disposition is a pure
+    # function of findings (plus the invalid-identity override).
+    # The classifier adds STALE_BASE on any base != main (even with an empty SHA),
+    # unlike the stale_base flag which needs both SHAs; mirror the classifier.
+    base_differs = identity.get("base_sha") != identity.get("current_main_sha")
+    # For an invalid identity (disposition is forced to NEEDS_ATTENTION anyway) a
+    # None SHA is coerced to "" in the identity, so the finding is not re-derivable.
+    if not gaps and ("STALE_BASE" in found) is not base_differs:
+        return False
+    if ("STALE_EVIDENCE" in found) is not flags["stale_evidence"]:
+        return False
+    if ("INVALID_IDENTITY" in found) is not bool(gaps):
+        return False
+    if "no_unique_merge_base" in identity:
+        if (identity["no_unique_merge_base"] is True) is not ("NO_UNIQUE_MERGE_BASE" in found):
+            return False
+    elif "NO_UNIQUE_MERGE_BASE" in found:
+        return False
+    expected_disposition = (
+        Disposition.NEEDS_ATTENTION if gaps else _disposition_from_findings(found)
+    )
+    if disposition != expected_disposition.value:
+        # Cross-PR overlap may demote an eligible REVIEW_READY item to WAIT_REBIND.
+        if not (
+            disposition == Disposition.WAIT_REBIND.value
+            and expected_disposition == Disposition.REVIEW_READY
+            and found & {"PATH_OVERLAP", "SAME_ISSUE_CHAIN"}
+        ):
+            return False
+
+    # R3: completeness and the informational gaps follow from findings/gaps,
+    # mirroring _classify_snapshot exactly.
+    # Contrived limit: a collection error whose text equals the informational
+    # merge-base gap, on a base that is not behind main, is not accepted.
+    merge_base_gap = "merge-base with current main unknown"
+    mergeable_gap = "mergeable state unknown"
+    if any(g not in item_gaps for g in gaps):
+        return False
+    if ("MERGE_BASE_UNKNOWN" in found) is not (merge_base_gap in item_gaps):
+        return False
+    if ("MERGEABLE_UNKNOWN" in found) is not (mergeable_gap in item_gaps):
+        return False
+    # MERGE_BASE_UNKNOWN is only emitted for a base behind main, never together
+    # with a proven missing merge-base.
+    if "MERGE_BASE_UNKNOWN" in found and (
+        (not base_differs and not gaps) or "NO_UNIQUE_MERGE_BASE" in found
+    ):
+        return False
+    if gaps or "COLLECTION_INCOMPLETE" in found:
+        expected_completeness = EvidenceCompleteness.INCOMPLETE
+    elif "MERGEABLE_UNKNOWN" in found or any(
+        g not in (merge_base_gap, mergeable_gap) for g in item_gaps
+    ):
+        expected_completeness = EvidenceCompleteness.PARTIAL
+    else:
+        expected_completeness = EvidenceCompleteness.COMPLETE
+    if completeness != expected_completeness.value:
         return False
     return True
 
@@ -1075,4 +1241,91 @@ def verify_repository_intelligence_report(payload: Mapping[str, Any]) -> bool:
         item_pr = item.get("pr_number")
         if isinstance(item_pr, bool) or not isinstance(item_pr, int) or item_pr != identity.get("pr_number"):
             return False
+    return _report_aggregates_match(payload, items) and _report_overlaps_match(items)
+
+
+def _item_base_disposition(item: Mapping[str, Any]) -> Disposition:
+    if not item["identity"]["is_valid"]:
+        return Disposition.NEEDS_ATTENTION
+    return _disposition_from_findings(item["findings"])
+
+
+def _report_overlaps_match(items: Sequence[Mapping[str, Any]]) -> bool:
+    """Re-derive the cross-PR WAIT_REBIND demotion from the recorded overlaps.
+
+    The payload carries each item's ``overlaps`` (PR number -> shared paths) but
+    not changed_files or issue numbers, so the overlap graph itself is taken from
+    the payload and must be symmetric, agree with PATH_OVERLAP, and demote every
+    mutually eligible pair exactly as overlap.detect does. SAME_ISSUE_CHAIN
+    demotions cannot be re-derived (no issue numbers) and are accepted only with
+    that finding present.
+    """
+    # Duplicate PR numbers fail closed by design: real open-PR lists never repeat
+    # a number and a duplicate would let a forger dodge the graph check below.
+    by_pr: dict[int, Mapping[str, Any]] = {}
+    for item in items:
+        by_pr[item["identity"]["pr_number"]] = item
+    if len(by_pr) != len(items):
+        return False
+    graph: dict[int, dict[int, list[str]]] = {}
+    for item in items:
+        pr = item["identity"]["pr_number"]
+        raw = item["overlaps"]
+        graph[pr] = {int(k): list(v) for k, v in raw.items()}
+        if (len(raw) > 0) is not ("PATH_OVERLAP" in item["findings"]):
+            return False
+    for pr, edges in graph.items():
+        for other, paths in edges.items():
+            if other == pr or not paths:
+                return False
+            if other in graph and graph[other].get(pr) != paths:
+                return False
+    eligible = {
+        pr: _item_base_disposition(by_pr[pr]) == Disposition.REVIEW_READY for pr in graph
+    }
+    for pr, item in by_pr.items():
+        demoted = eligible[pr] and any(eligible.get(other) for other in graph[pr])
+        if demoted and item["disposition"] != Disposition.WAIT_REBIND.value:
+            return False
+        if item["disposition"] == Disposition.WAIT_REBIND.value and not (
+            demoted or "SAME_ISSUE_CHAIN" in item["findings"]
+        ):
+            return False
+    return True
+
+
+def _report_aggregates_match(payload: Mapping[str, Any], items: Sequence[Mapping[str, Any]]) -> bool:
+    """Recompute top-level completeness and gaps exactly as the builder does."""
+    repositories = {
+        item["identity"]["repository"] for item in items if item["identity"]["repository"]
+    }
+    main_shas = {
+        item["identity"]["current_main_sha"]
+        for item in items
+        if item["identity"]["current_main_sha"]
+    }
+    gaps: list[str] = []
+    if not items:
+        gaps.append("no pull request evidence")
+    if len(repositories) > 1:
+        gaps.append("mixed repository identity")
+    if len(main_shas) > 1:
+        gaps.append("mixed current main identity")
+    for item in items:
+        gaps.extend(f"pr:{item['identity']['pr_number']}:{gap}" for gap in item["evidence_gaps"])
+    comps = {item["evidence_completeness"] for item in items}
+    if not items or len(repositories) > 1 or len(main_shas) > 1 or "INCOMPLETE" in comps:
+        completeness = EvidenceCompleteness.INCOMPLETE
+    elif "PARTIAL" in comps:
+        completeness = EvidenceCompleteness.PARTIAL
+    else:
+        completeness = EvidenceCompleteness.COMPLETE
+    if payload.get("evidence_completeness") != completeness.value:
+        return False
+    if payload.get("evidence_gaps") != list(dict.fromkeys(gaps)):
+        return False
+    if len(repositories) <= 1 and payload.get("repository") != next(iter(repositories), ""):
+        return False
+    if len(main_shas) <= 1 and payload.get("current_main_sha") != next(iter(main_shas), ""):
+        return False
     return True

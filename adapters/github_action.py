@@ -692,6 +692,32 @@ def verify_cloud_bundle(payload: Mapping[str, Any]) -> bool:
         result = reports[name]["result"]
         if not isinstance(result, Mapping) or not identity_consistent(result.get("identity")):
             return False
+    # All three reports embed the same RevisionIdentity: compare the full mapping,
+    # not only the five-part review identity, so flags cannot diverge per report.
+    def _norm(identity: Any, *, drop: tuple[str, ...] = ()) -> Any:
+        # Builders disagree on "" vs None for absent declared SHAs; both mean absent.
+        if not isinstance(identity, Mapping):
+            return None
+        out = {k: v for k, v in identity.items() if k not in drop}
+        for key in ("declared_base_sha", "declared_head_sha", "declared_main_sha"):
+            if key in out and out[key] == "":
+                out[key] = None
+        return out
+
+    readiness_identity = _norm(reports["readiness"]["result"].get("identity"))
+    if readiness_identity is None:
+        return False
+    if _norm(reports["cfi"]["result"].get("identity")) != readiness_identity:
+        return False
+    # The EIA projection is built from the primitive snapshot without the
+    # merge-base probe, so its ``no_unique_merge_base`` legitimately differs;
+    # every other key must agree.
+    drop = ("no_unique_merge_base",)
+    eia_identity = _norm(reports["eia"]["result"].get("identity"), drop=drop)
+    if eia_identity is None or eia_identity != _norm(
+        reports["readiness"]["result"].get("identity"), drop=drop
+    ):
+        return False
     if not readiness_item_is_coherent(reports["readiness"]["result"]):
         return False
 
