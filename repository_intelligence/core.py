@@ -1039,7 +1039,9 @@ def _readiness_item_is_rederivable(
     if not isinstance(overlaps, Mapping):
         return False
     for key, paths in overlaps.items():
-        if int(key) <= 0 or not isinstance(paths, list) or not paths:
+        # The key only has to parse: an invalid-identity PR (number <= 0) can overlap.
+        int(key)
+        if not isinstance(paths, list) or not paths:
             return False
         if not all(isinstance(path, str) for path in paths):
             return False
@@ -1079,6 +1081,8 @@ def _readiness_item_is_rederivable(
 
     # R3: completeness and the informational gaps follow from findings/gaps,
     # mirroring _classify_snapshot exactly.
+    # Contrived limit: a collection error whose text equals the informational
+    # merge-base gap, on a base that is not behind main, is not accepted.
     merge_base_gap = "merge-base with current main unknown"
     mergeable_gap = "mergeable state unknown"
     if any(g not in item_gaps for g in gaps):
@@ -1256,6 +1260,8 @@ def _report_overlaps_match(items: Sequence[Mapping[str, Any]]) -> bool:
     demotions cannot be re-derived (no issue numbers) and are accepted only with
     that finding present.
     """
+    # Duplicate PR numbers fail closed by design: real open-PR lists never repeat
+    # a number and a duplicate would let a forger dodge the graph check below.
     by_pr: dict[int, Mapping[str, Any]] = {}
     for item in items:
         by_pr[item["identity"]["pr_number"]] = item

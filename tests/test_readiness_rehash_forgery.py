@@ -97,6 +97,8 @@ GENUINE_SNAPSHOTS = {
     "empty_base_among_valid": [_pr(1), _pr(2, base_sha=""), _pr(3, current_main_sha="")],
     "empty_base_no_merge_base": [_pr(base_sha="", merge_base_status="NONE")],
     "empty_base_resolved": [_pr(base_sha="", merge_base_status="RESOLVED")],
+    "overlap_with_pr_zero": [_pr(1, changed_files=("x.py",)), _pr(0, changed_files=("x.py",))],
+    "overlap_with_negative_pr": [_pr(1, changed_files=("x.py",)), _pr(-3, changed_files=("x.py",))],
     "none_base_sha": [_pr(base_sha=None)],
     "none_main_sha": [_pr(current_main_sha=None)],
     "none_base_empty_main": [_pr(base_sha=None, current_main_sha="")],
@@ -591,3 +593,14 @@ def test_downgraded_partial_is_rejected(mutate, snap):
     assert _item0(report)["evidence_completeness"] == "PARTIAL"
     mutate(report)
     assert ri.verify_repository_intelligence_report(_rehash_report(report)) is False
+
+
+def test_duplicate_pr_numbers_fail_closed_by_design():
+    # Real open-PR lists never repeat a number, and a duplicate would let a forger
+    # dodge the overlap-graph check, so such reports intentionally do not verify.
+    for snaps in (
+        [_pr(1, head_sha="h-a"), _pr(1, head_sha="h-b")],
+        [_pr(0, changed_files=("x.py",)), _pr(0, changed_files=("x.py",))],
+    ):
+        report = ri.build_repository_intelligence_report(snaps).to_dict()
+        assert ri.verify_repository_intelligence_report(report) is False
