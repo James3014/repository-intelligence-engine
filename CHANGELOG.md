@@ -4,6 +4,12 @@ All notable changes to Repository Intelligence Engine are documented here.
 
 The project follows semantic versioning while it remains in the `0.x` series. Immutable release tags are never moved after publication.
 
+## [Unreleased]
+
+### Changed
+
+- `classifier.DEFAULT_AUTHORITY_PATTERNS` is now `()` (Issue #80). `classify()` no longer treats `AGENTS.md`, `docs/agents/`, `docs/governance/` and `policy/` as protected by default, matching the README ("Generic protected-path policy defaults empty and may be explicitly injected by a consumer"). The name stays importable. Callers that relied on the old default must pass `authority_patterns=("AGENTS.md", "docs/agents/", "docs/governance/", "policy/")` explicitly; `classify_readiness` / the CLI already default to the empty policy.
+
 ## [0.1.6] - 2026-10-13
 
 Systemic-signal hardening (follow-up to #98).
