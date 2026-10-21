@@ -77,8 +77,11 @@ def _build_alias_map(tree: ast.Module) -> dict[str, str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for entry in node.names:
-                name = entry.name
-                asname = entry.asname or name.split(".", 1)[0]
+                if entry.asname:
+                    name = entry.name
+                    asname = entry.asname
+                else:
+                    name = asname = entry.name.split(".", 1)[0]
                 key = (name, asname)
                 if key not in seen:
                     seen.add(key)
