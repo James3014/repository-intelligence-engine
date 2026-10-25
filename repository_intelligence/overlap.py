@@ -24,14 +24,16 @@ def detect(items):
 
     issues = {}
     for classification in items:
-        for issue_number in classification.snapshot.issue_numbers:
-            issues.setdefault(issue_number, []).append(classification)
+        for issue_number in set(classification.snapshot.issue_numbers or ()):
+            issues.setdefault(issue_number, {})[classification.snapshot.pr_number] = classification
 
-    for classifications in issues.values():
+    for issue_prs in issues.values():
+        classifications = list(issue_prs.values())
         if len(classifications) > 1:
             for classification in classifications:
-                classification.findings.append("SAME_ISSUE_CHAIN")
-                classification.reasons.append("multiple active PRs share an Issue")
+                if "SAME_ISSUE_CHAIN" not in classification.findings:
+                    classification.findings.append("SAME_ISSUE_CHAIN")
+                    classification.reasons.append("multiple active PRs share an Issue")
             eligible = [
                 classification
                 for classification in classifications
