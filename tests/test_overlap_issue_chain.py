@@ -45,3 +45,11 @@ def test_real_chain_between_two_prs_is_still_detected():
     assert a.findings.count("SAME_ISSUE_CHAIN") == b.findings.count("SAME_ISSUE_CHAIN") == 1
     assert a.disposition == b.disposition == Disposition.WAIT_REBIND
     assert "SAME_ISSUE_CHAIN" not in c.findings and c.disposition == Disposition.REVIEW_READY
+
+
+def test_duplicate_pr_number_snapshots_do_not_hide_a_real_chain():
+    a, b, a_again = _pr(1, (7,)), _pr(2, (7,)), _pr(1, (7,))
+    overlap.detect([a, b, a_again])
+    for c in (a, b, a_again):
+        assert c.findings.count("SAME_ISSUE_CHAIN") == 1
+        assert c.disposition == Disposition.WAIT_REBIND

@@ -25,7 +25,7 @@ def detect(items):
     issues = {}
     for classification in items:
         for issue_number in set(classification.snapshot.issue_numbers or ()):
-            issues.setdefault(issue_number, {})[classification.snapshot.pr_number] = classification
+            issues.setdefault(issue_number, {})[id(classification)] = classification
 
     for issue_prs in issues.values():
         classifications = list(issue_prs.values())
